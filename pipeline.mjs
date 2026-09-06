@@ -23,30 +23,20 @@ const ART = path.join(ROOT, "art");
 const CACHE = path.join(OUT, ".cache");
 const MANIFEST = path.join(OUT, "manifest.json");
 
-const PROVIDER = process.env.LLM_PROVIDER || (process.env.OPENROUTER_KEY ? "openrouter" : "gemini");
-
 const ENV = {
   rawg: process.env.RAWG_KEY,
   sgdb: process.env.SGDB_KEY,
-  provider: PROVIDER,
-  key: PROVIDER === "openrouter" ? process.env.OPENROUTER_KEY : process.env.GEMINI_KEY,
-  textModel:
-    PROVIDER === "openrouter"
-      ? process.env.OPENROUTER_TEXT_MODEL || "deepseek/deepseek-chat-v3.1:free"
-      : process.env.GEMINI_MODEL || "gemini-3-flash",
-  visionModel:
-    PROVIDER === "openrouter"
-      ? process.env.OPENROUTER_VISION_MODEL || "qwen/qwen2.5-vl-72b-instruct:free"
-      : process.env.GEMINI_MODEL || "gemini-3-flash",
-  // OpenRouter allows 20 requests/minute, Gemini's free Flash tier allows 10.
-  gap: PROVIDER === "openrouter" ? 3200 : 6500,
+  key: process.env.OPENROUTER_KEY,
+  textModel: process.env.OPENROUTER_TEXT_MODEL || "openrouter/free",
+  visionModel: process.env.OPENROUTER_VISION_MODEL || "openrouter/free",
+  // OpenRouter free tier: 20 req/min
+  gap: 3200,
   vision: process.env.VISION_REVIEW !== "false",
   bleed: Number(process.env.BLEED_MM ?? 3),
   autoThreshold: Number(process.env.AUTO_THRESHOLD ?? 70),
 };
 
 const llmOpts = (which) => ({
-  provider: ENV.provider,
   key: ENV.key,
   model: which === "vision" ? ENV.visionModel : ENV.textModel,
 });
@@ -150,7 +140,7 @@ async function buildOne(line, force) {
     }
 
     copy = await llmCopy(meta, llmOpts("text")).catch((e) => {
-      log(`  gemini copy failed (${e.message}) — falling back to the RAWG description`);
+      log(`  LLM copy failed (${e.message}) — falling back to the RAWG description`);
       return null;
     });
 
