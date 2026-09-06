@@ -49,24 +49,29 @@ const llmOpts = (which) => ({
 /**
  * Hand-made art in art/<slug>/ wins over anything fetched.
  * Layout:
- *   art/<slug>/front.png          <- required for custom mode
- *   art/<slug>/back.png           <- optional back panel background
- *   art/<slug>/shots/0..2.jpg     <- optional gameplay screenshots
+ *   art/<slug>/front.{png,jpg,jpeg,webp}    <- required for custom mode
+ *   art/<slug>/back.{png,jpg,jpeg,webp}     <- optional back panel background
+ *   art/<slug>/shots/0..N.{png,jpg,...}     <- optional gameplay screenshots
  */
 async function localArt(slug) {
   const found = { front: null, back: null, shots: [] };
   const artDir = path.join(ART, slug);
 
-  // front.png / back.png
-  for (const [key, fname] of [["front", "front.png"], ["back", "back.png"]]) {
-    const p = path.join(artDir, fname);
+  // front.* / back.* — accept any image extension
+  for (const key of ["front", "back"]) {
+    let files = [];
     try {
-      await fs.access(p);
-      found[key] = p;
-    } catch {}
+      files = await fs.readdir(artDir);
+    } catch {
+      continue;
+    }
+    const match = files.find(
+      (f) => new RegExp(`^${key}\\.(png|jpe?g|webp)$`, "i").test(f)
+    );
+    if (match) found[key] = path.join(artDir, match);
   }
 
-  // shots/0..N.jpg — numbered in order
+  // shots/0..N.* — any image extension, sorted alphabetically
   try {
     const shotFiles = await fs.readdir(path.join(artDir, "shots"));
     const shots = shotFiles
