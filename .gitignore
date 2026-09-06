@@ -13,6 +13,9 @@ out/
 # per-game generated art
 art/*/
 
+# downloaded templates
+templates/
+
 # IDE
 .vscode/
 .idea/
