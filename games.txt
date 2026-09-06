@@ -1,0 +1,6 @@
+# One per line:  Title | PS4 or PS5
+# Lines starting with # are ignored.
+Hades | PS5
+Hollow Knight | PS4
+Celeste | PS4
+Disco Elysium | PS5
