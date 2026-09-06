@@ -10,6 +10,9 @@ out/
 .env.local
 .env.*.local
 
+# per-game generated art
+art/*/
+
 # IDE
 .vscode/
 .idea/

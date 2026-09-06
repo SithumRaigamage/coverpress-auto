@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 /* Coverpress automation.
-     node pipeline.mjs build            fetch + compose + auto-check every game in games.txt
-     node pipeline.mjs review           open the manual review queue on :5173
-     node pipeline.mjs print            build a print sheet of everything approved
-     node pipeline.mjs prompts          write art prompts to paste into the Gemini app
-     node pipeline.mjs models           list OpenRouter :free models and which take images
-     node pipeline.mjs build --force    ignore the cache
+
+  games.txt format:  Title | Platform | mode
+    mode:  custom (recommended) — use art/<slug>/front.png; fall back to scraped art if missing
+           auto              — use SteamGridDB / RAWG art only
+
+  node pipeline.mjs build            fetch + compose + auto-check every game in games.txt
+  node pipeline.mjs prompts          write art prompts to art/<slug>/PROMPTS.md
+  node pipeline.mjs review           open the manual review queue on :5173
+  node pipeline.mjs print            build a print sheet of everything approved
+  node pipeline.mjs models           list OpenRouter :free models and which take images
+  node pipeline.mjs build --force    ignore the cache
 */
 
 import fs from "node:fs/promises";
@@ -41,20 +46,36 @@ const llmOpts = (which) => ({
   model: which === "vision" ? ENV.visionModel : ENV.textModel,
 });
 
-/** Hand-made art in art/ always wins over anything fetched. */
+/**
+ * Hand-made art in art/<slug>/ wins over anything fetched.
+ * Layout:
+ *   art/<slug>/front.png          <- required for custom mode
+ *   art/<slug>/back.png           <- optional back panel background
+ *   art/<slug>/shots/0..2.jpg     <- optional gameplay screenshots
+ */
 async function localArt(slug) {
-  const found = { front: null, back: null };
-  let files = [];
-  try {
-    files = await fs.readdir(ART);
-  } catch {
-    return found;
+  const found = { front: null, back: null, shots: [] };
+  const artDir = path.join(ART, slug);
+
+  // front.png / back.png
+  for (const [key, fname] of [["front", "front.png"], ["back", "back.png"]]) {
+    const p = path.join(artDir, fname);
+    try {
+      await fs.access(p);
+      found[key] = p;
+    } catch {}
   }
-  const pick = (suffix) =>
-    files.find((f) => /\.(png|jpe?g|webp)$/i.test(f) && f.replace(/\.[^.]+$/, "").toLowerCase() === (slug + suffix));
-  const f = pick(""), b = pick("-back");
-  if (f) found.front = path.join(ART, f);
-  if (b) found.back = path.join(ART, b);
+
+  // shots/0..N.jpg — numbered in order
+  try {
+    const shotFiles = await fs.readdir(path.join(artDir, "shots"));
+    const shots = shotFiles
+      .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+      .map((f) => path.join(artDir, "shots", f))
+      .sort();
+    found.shots = shots;
+  } catch {}
+
   return found;
 }
 
@@ -96,13 +117,21 @@ async function renderCover(cfg, imagePaths, { bleed = ENV.bleed } = {}) {
 /* --------------------------------------------------------------- build */
 
 async function buildOne(line, force) {
-  const [rawTitle, rawPlatform] = line.split("|").map((s) => s.trim());
+  const [rawTitle, rawPlatform, rawMode] = line.split("|").map((s) => s.trim());
   const platform = (rawPlatform || "PS5").toUpperCase();
+  const mode = rawMode === "auto" ? "auto" : "custom"; // default: custom
   const slug = slugify(`${rawTitle}-${platform}`);
   const dir = path.join(OUT, slug);
   const cachePath = path.join(CACHE, `${slug}.json`);
+  const artDir = path.join(ART, slug);
+  const artShotsDir = path.join(artDir, "shots");
+
   await fs.mkdir(dir, { recursive: true });
   await fs.mkdir(CACHE, { recursive: true });
+  await fs.mkdir(artDir, { recursive: true });
+  await fs.mkdir(artShotsDir, { recursive: true });
+
+  log(`  mode: ${mode}`);
 
   let cached = null;
   if (!force) cached = await fs.readFile(cachePath, "utf8").then(JSON.parse).catch(() => null);
@@ -147,6 +176,27 @@ async function buildOne(line, force) {
     await fs.writeFile(cachePath, JSON.stringify({ meta, copy, imagePaths }, null, 2));
   }
 
+  // Generate art prompts for art/<slug>/PROMPTS.md — cached to out/<slug>/PROMPTS.json
+  // so no extra LLM calls on rebuild. The PROMPTS.md is regenerated from the JSON.
+  const promptsJsonPath = path.join(dir, "PROMPTS.json");
+  const promptsMdPath = path.join(artDir, "PROMPTS.md");
+  let artPrompts = null;
+  try {
+    if (!force) {
+      const existing = await fs.readFile(promptsJsonPath, "utf8");
+      artPrompts = JSON.parse(existing);
+    }
+  } catch {}
+  if (!artPrompts && ENV.key) {
+    artPrompts = await llmArtPrompt(meta, llmOpts("text")).catch(() => null);
+    if (artPrompts) {
+      await fs.writeFile(promptsJsonPath, JSON.stringify(artPrompts, null, 2));
+      await writePromptsMd(promptsMdPath, meta, platform, artPrompts);
+      log(`  art prompts written  art/${slug}/PROMPTS.md`);
+    }
+    await sleep(ENV.gap);
+  }
+
   const cfg = {
     ...DEFAULT_CFG,
     ...CASE,
@@ -160,14 +210,22 @@ async function buildOne(line, force) {
     rating: meta.rating,
   };
 
-  // art/<slug>.png overrides whatever was fetched, and is re-checked on every build.
+  // art/<slug>/front.png overrides whatever was fetched, and is re-checked on every build.
   const custom = await localArt(slug);
-  const paths = {
-    front: custom.front || imagePaths.front,
-    back: custom.back || imagePaths.back,
-    shots: imagePaths.shots,
-  };
-  if (custom.front) log(`  using custom art  art/${path.basename(custom.front)}`);
+
+  // In custom mode (recommended), missing custom art falls back to scraped art with a warning.
+  // In auto mode, scraped art is always the default.
+  const useFront = custom.front || (mode === "auto" || imagePaths.front ? imagePaths.front : null);
+  const useBack  = custom.back  || (mode === "auto" || imagePaths.back  ? imagePaths.back  : null);
+  const useShots = custom.shots.length ? custom.shots : imagePaths.shots;
+
+  if (custom.front) {
+    log(`  using custom art  art/${slug}/front.png`);
+  } else if (mode === "custom") {
+    log(`  custom mode: no art/${slug}/front.png — falling back to scraped art`);
+  }
+
+  const paths = { front: useFront, back: useBack, shots: useShots };
 
   const { canvas, ctx, art } = await renderCover(cfg, paths);
   const png = canvas.toBuffer("image/png");
@@ -196,6 +254,7 @@ async function buildOne(line, force) {
     title: meta.name,
     query: rawTitle,
     platform,
+    mode,
     cfg,
     imagePaths: paths,
     customArt: !!custom.front,
@@ -236,8 +295,11 @@ async function build(force) {
   await fs.writeFile(MANIFEST, JSON.stringify({ generated: new Date().toISOString(), items }, null, 2));
 
   const by = (s) => items.filter((i) => i.status === s).length;
+  const withCustomArt = items.filter((i) => i.customArt);
   log(`\n${items.length} covers · ${by("auto_approved")} auto-approved · ${by("needs_review")} need review · ${by("failed")} failed`);
-  log(`Review them with:  node pipeline.mjs review`);
+  if (withCustomArt.length) log(`  ${withCustomArt.length} cover(s) use your art from art/<slug>/`);
+  log(`\nGenerate cover art:  npm run prompts   (writes art/<slug>/PROMPTS.md)`);
+  log(`Review queue:         node pipeline.mjs review`);
 }
 
 /* -------------------------------------------------------------- review */
@@ -328,10 +390,81 @@ ${pages}`;
 
 /* ------------------------------------------------------------- prompts */
 
+/** Write a per-game PROMPTS.md into art/<slug>/ so the user can paste prompts into Google Flow. */
+async function writePromptsMd(outPath, meta, platform, p) {
+  const shotBlock = (i, label) => `## ${label}
+16:9 · 128×72mm · 721×406 px at 300 DPI
+In-game scene. No UI, no text, no watermarks. Vary framing: shot ${i} should be a different composition from the others.
+
+\`\`\`
+${p.shots[i] || ""}
+\`\`\`
+`;
+
+  const frontPalette = p.front.palette ? `\nPalette: ${p.front.palette}` : "";
+  const frontAccent = p.front.accentHex ? `  ·  accent ${p.front.accentHex}` : "";
+  const backPalette = p.back.palette ? `\nPalette: ${p.back.palette}` : "";
+  const backAccent = p.back.accentHex ? `  ·  accent ${p.back.accentHex}` : "";
+
+  const doc = `# ${meta.name} (${platform}) — cover art prompts
+
+Generate each prompt in Google Flow, Gemini, or your preferred image generator, then save
+the image into the same \`art/${slugify(meta.name + " " + platform)}/\` folder under the
+filename shown. The pipeline picks them up automatically on the next \`npm run build\`.
+
+## Front cover (required)
+Portrait 3:4 · 128×148mm · 1512×1748 px at 300 DPI
+Save as \`front.png\`. Subject fills the upper 2/3; the bottom 1/3 must stay calm and
+dark — the game title and platform logo print on top of it.
+
+\`\`\`
+${p.front.prompt}
+\`\`\`${frontPalette}${frontAccent}
+
+---
+
+## Back panel background (optional)
+Portrait 3:4 · 128×148mm · 1512×1748 px at 300 DPI
+Save as \`back.png\`. Dark, moody, low-detail — 80% of this panel is overlaid with text,
+screenshots, a rating box, and a barcode.
+
+\`\`\`
+${p.back.prompt}
+\`\`\`${backPalette}${backAccent}
+
+---
+
+${shotBlock(0, "Screenshot 1 of 3 (required)")}
+
+---
+
+${shotBlock(1, "Screenshot 2 of 3 (required)")}
+
+---
+
+${shotBlock(2, "Screenshot 3 of 3 (required)")}
+
+---
+
+## Files to produce
+
+| Slot | File | Required? |
+|---|---|---|
+| Front | \`front.png\` | **yes** |
+| Back | \`back.png\` | optional |
+| Shot 1 | \`shots/0.jpg\` | recommended |
+| Shot 2 | \`shots/1.jpg\` | recommended |
+| Shot 3 | \`shots/2.jpg\` | recommended |
+
+Missing slots fall back to scraped art. Run \`npm run build\` after dropping images in.
+`;
+
+  await fs.writeFile(outPath, doc);
+}
+
 async function prompts(onlyMissing) {
   const m = await readManifest();
   if (!m.items.length) throw new Error("Run `npm run build` first.");
-  await fs.mkdir(ART, { recursive: true });
 
   const targets = m.items.filter((i) => {
     if (i.status === "failed" || !i.cfg) return false;
@@ -339,42 +472,57 @@ async function prompts(onlyMissing) {
     return !i.customArt;
   });
 
-  const blocks = [];
-  for (const [n, item] of targets.entries()) {
-    const cached = await fs
-      .readFile(path.join(CACHE, `${item.slug}.json`), "utf8")
-      .then(JSON.parse)
-      .catch(() => null);
-    if (!cached?.meta) continue;
-
-    log(`[${n + 1}/${targets.length}] ${item.title}`);
-    const art = await llmArtPrompt(cached.meta, llmOpts("text"));
-    await fs.writeFile(path.join(OUT, item.slug, "prompt.txt"), art.prompt);
-    blocks.push(
-      `## ${item.title} (${item.platform})\n\n` +
-        `Save the result as **art/${item.slug}.png**\n\n` +
-        "```\n" + art.prompt + "\n```\n" +
-        (art.palette ? `Palette: ${art.palette}${art.accentHex ? `  ·  accent ${art.accentHex}` : ""}\n` : "")
-    );
-    if (ENV.key) await sleep(ENV.gap);
+  if (!ENV.key) {
+    log("No OPENROUTER_KEY — cannot generate prompts. Set the key in .env and retry.");
+    return;
   }
 
-  const doc = `# Art prompts
+  let written = 0;
+  for (const [n, item] of targets.entries()) {
+    const artDir = path.join(ART, item.slug);
+    const shotsDir = path.join(artDir, "shots");
+    const promptsJsonPath = path.join(OUT, item.slug, "PROMPTS.json");
+    const promptsMdPath = path.join(artDir, "PROMPTS.md");
 
-Generate each of these in the Gemini app or Google Flow, then save the image into \`art/\`
-under the filename shown. Ask for portrait 3:4 and the highest resolution offered — the
-panel needs at least 1512x1748 px at 300 DPI or the build will flag it as soft.
+    await fs.mkdir(artDir, { recursive: true });
+    await fs.mkdir(shotsDir, { recursive: true });
 
-Optional: \`art/<slug>-back.png\` overrides the back panel background too.
+    let artPrompts = null;
+    try {
+      artPrompts = JSON.parse(await fs.readFile(promptsJsonPath, "utf8"));
+    } catch {}
 
-Then re-run \`npm run build\`. Cached metadata means no API calls are spent.
+    if (!artPrompts) {
+      const cached = await fs
+        .readFile(path.join(CACHE, `${item.slug}.json`), "utf8")
+        .then(JSON.parse)
+        .catch(() => null);
+      if (!cached?.meta) continue;
 
----
+      log(`[${n + 1}/${targets.length}] ${item.title}`);
+      artPrompts = await llmArtPrompt(cached.meta, llmOpts("text")).catch(() => null);
+      if (artPrompts) {
+        await fs.writeFile(promptsJsonPath, JSON.stringify(artPrompts, null, 2));
+      }
+      await sleep(ENV.gap);
+    }
 
-${blocks.join("\n---\n\n")}`;
+    if (artPrompts) {
+      // We don't have meta here directly — recover it from cache.
+      const cached = await fs
+        .readFile(path.join(CACHE, `${item.slug}.json`), "utf8")
+        .then(JSON.parse)
+        .catch(() => null);
+      if (cached?.meta) {
+        await writePromptsMd(promptsMdPath, cached.meta, item.platform, artPrompts);
+        written++;
+        log(`  art/${item.slug}/PROMPTS.md`);
+      }
+    }
+  }
 
-  await fs.writeFile(path.join(OUT, "prompts.md"), doc);
-  log(`\nout/prompts.md — ${blocks.length} prompt(s). Drop finished images into art/ and rebuild.`);
+  log(`\n${written} prompt file(s) written into art/<slug>/PROMPTS.md`);
+  log(`Generate the images in Google Flow, drop them into the matching art/<slug>/ folder, then run \`npm run build\`.`);
 }
 
 /* -------------------------------------------------------------- models */

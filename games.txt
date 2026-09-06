@@ -1,6 +1,13 @@
-# One per line:  Title | PS4 or PS5
-# Lines starting with # are ignored.
-Hades | PS5
-Hollow Knight | PS4
-Celeste | PS4
-Disco Elysium | PS5
+# Format: Title | Platform | mode
+# Modes:
+#   custom  (recommended) — use art/<slug>/front.png; if missing, fall back to scraped art
+#   auto                 — use scraped art from SteamGridDB / RAWG
+#
+# Pipeline:
+#   1. Add your game here
+#   2. npm run prompts    — creates art/<slug>/PROMPTS.md with 5 image prompts
+#   3. Generate images in Google Flow / Gemini / your preferred tool
+#   4. Save into art/<slug>/front.png, back.png (optional), shots/0..2.jpg
+#   5. npm run build      — uses your art; the printed cover is ready
+
+Marvel's Spider-Man 2 (2023) | PS5 | custom
