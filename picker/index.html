@@ -443,7 +443,7 @@
   </div>
 
   <div class="footer">
-    <button class="btn btn-cancel" onclick="location.reload()">Cancel</button>
+    <button class="btn btn-cancel" id="cancelBtn">Cancel</button>
     <button class="btn btn-save" id="saveBtn">Save to games.txt</button>
   </div>
 </div>
@@ -504,8 +504,8 @@ searchInput.addEventListener("input", async (e) => {
       searchResults.innerHTML = hits.map((g, idx) => {
         const plats = g.platforms?.length ? g.platforms.join(", ") : "unknown";
         return `
-          <div class="result-item" onclick="toggleResult(${idx}, '${escapeHtml(g.name)}', '${escapeHtml(plats)}')">
-            <input type="checkbox" data-idx="${idx}" data-name="${escapeHtml(g.name)}">
+          <div class="result-item" data-idx="${idx}" data-name="${escapeHtml(g.name)}" data-plats="${escapeHtml(plats)}">
+            <input type="checkbox" data-idx="${idx}">
             <div class="result-info">
               <div class="result-name">${escapeHtml(g.name)}</div>
               <div class="result-plats">${escapeHtml(plats)}</div>
@@ -514,6 +514,23 @@ searchInput.addEventListener("input", async (e) => {
         `;
       }).join("");
 
+      // Attach click handlers via event delegation
+      searchResults.querySelectorAll(".result-item").forEach(item => {
+        item.addEventListener("click", (e) => {
+          const checkbox = item.querySelector("input[type=checkbox]");
+          checkbox.checked = !checkbox.checked;
+          const name = item.dataset.name;
+          if (checkbox.checked) {
+            if (!state.queue.find(g => g.title === name)) {
+              state.queue.push({ title: name, platform: "PS5", mode: "custom" });
+            }
+          } else {
+            state.queue = state.queue.filter(g => g.title !== name);
+          }
+          renderQueue();
+        });
+      });
+
       searchResults.style.display = "block";
     } catch (e) {
       searchResults.innerHTML = `<div style="padding:16px; color:var(--danger);">Error: ${escapeHtml(e.message)}</div>`;
@@ -521,20 +538,6 @@ searchInput.addEventListener("input", async (e) => {
     }
   }, 300);
 });
-
-function toggleResult(idx, name, plats) {
-  const checkbox = document.querySelector(`input[data-idx="${idx}"]`);
-  checkbox.checked = !checkbox.checked;
-
-  if (checkbox.checked) {
-    if (!state.queue.find(g => g.title === name)) {
-      state.queue.push({ title: name, platform: "PS5", mode: "custom" });
-    }
-  } else {
-    state.queue = state.queue.filter(g => g.title !== name);
-  }
-  renderQueue();
-}
 
 function renderQueue() {
   const queueEl = document.getElementById("queue");
@@ -549,15 +552,19 @@ function renderQueue() {
         <span class="queue-badge">${modeEmoji}</span>
         <div class="queue-name">${escapeHtml(g.title)}</div>
         <span class="tag">${g.platform}</span>
-        <button class="queue-remove" onclick="removeFromQueue(${i})">Remove</button>
+        <button class="queue-remove" data-idx="${i}">Remove</button>
       </div>
     `;
   }).join("");
-}
 
-function removeFromQueue(idx) {
-  state.queue.splice(idx, 1);
-  renderQueue();
+  // Attach remove handlers via event delegation
+  queueEl.querySelectorAll(".queue-remove").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      state.queue.splice(idx, 1);
+      renderQueue();
+    });
+  });
 }
 
 document.getElementById("bulkApply").addEventListener("click", () => {
@@ -608,7 +615,7 @@ function renderGamesTable() {
             <option value="raw" ${g.mode === "raw" ? "selected" : ""}>🖼️ Raw</option>
           </select>
         </td>
-        <td><button class="row-remove" onclick="removeRow(${i})">✕</button></td>
+        <td><button class="row-remove" data-idx="${i}">✕</button></td>
       </tr>
     `;
   }).join("");
@@ -625,16 +632,23 @@ function renderGamesTable() {
       }
     });
   });
+
+  tbody.querySelectorAll(".row-remove").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (idx < state.allGames.length) {
+        state.allGames.splice(idx, 1);
+      } else {
+        state.queue.splice(idx - state.allGames.length, 1);
+      }
+      renderGamesTable();
+    });
+  });
 }
 
-function removeRow(idx) {
-  if (idx < state.allGames.length) {
-    state.allGames.splice(idx, 1);
-  } else {
-    state.queue.splice(idx - state.allGames.length, 1);
-  }
-  renderGamesTable();
-}
+document.getElementById("cancelBtn").addEventListener("click", () => {
+  location.reload();
+});
 
 document.getElementById("saveBtn").addEventListener("click", async () => {
   const games = [...state.allGames, ...state.queue];
