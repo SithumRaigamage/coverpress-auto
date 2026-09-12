@@ -10,7 +10,9 @@
     "review": "node --env-file=.env pipeline.mjs review",
     "print": "node --env-file=.env pipeline.mjs print",
     "prompts": "node --env-file=.env pipeline.mjs prompts",
-    "models": "node --env-file=.env pipeline.mjs models"
+    "models": "node --env-file=.env pipeline.mjs models",
+    "select": "node --env-file=.env pipeline.mjs select",
+    "dev": "node --env-file=.env pipeline.mjs select"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.60"
