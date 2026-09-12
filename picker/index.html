@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Game picker</title>
+<style>
+  :root { --paper:#E9E7E0; --sheet:#FAF9F6; --ink:#16233A; --soft:#5C6478; --rule:#C9C6BC;
+          --mat:#1B2233; --good:#0F7B96; --warn:#B06A00; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink);
+         font:14px/1.5 "Helvetica Neue",Helvetica,Arial,sans-serif; padding:20px; }
+  .container { max-width:1200px; margin:0 auto; }
+  h1 { margin:0 0 8px; font-size:19px; font-weight:600; letter-spacing:-.3px; }
+  .header { display:flex; gap:20px; flex-wrap:wrap; margin-bottom:24px; }
+  .search-box { flex:1; min-width:280px; }
+  .search-box input { width:100%; padding:10px; border:1px solid var(--rule);
+                      background:#fff; font:inherit; font-size:14px; border-radius:2px; }
+  .search-results { background:var(--sheet); border:1px solid var(--rule);
+                    max-height:300px; overflow-y:auto; margin-top:8px; border-radius:2px; }
+  .result-item { padding:10px 12px; border-bottom:1px solid var(--rule); cursor:pointer;
+                 display:flex; align-items:center; gap:12px; }
+  .result-item:hover { background:#f0ede7; }
+  .result-item input[type=checkbox] { width:16px; height:16px; cursor:pointer; flex:0 0 auto; }
+  .result-info { flex:1; font-size:13px; }
+  .result-name { font-weight:600; color:var(--ink); }
+  .result-plats { color:var(--soft); font-size:12px; }
+  .bulk-controls { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+  .bulk-controls label { display:flex; flex-direction:column; font-size:11px; color:var(--soft); }
+  .bulk-controls select { padding:6px 8px; border:1px solid var(--rule);
+                          background:#fff; font:inherit; font-size:13px; border-radius:2px; }
+  .bulk-apply { padding:9px 16px; background:var(--ink); color:var(--paper); border:1px solid var(--ink);
+                font:inherit; font-size:13px; cursor:pointer; border-radius:2px; }
+  .main { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+  @media (max-width:900px) { .main { grid-template-columns:1fr; } }
+  .column h2 { margin:0 0 12px; font-size:15px; font-weight:600; }
+  .queue, .table { background:var(--sheet); border:1px solid var(--rule); border-radius:2px; }
+  .queue { padding:12px; }
+  .queue-item { display:flex; gap:8px; padding:8px; background:var(--paper); margin-bottom:8px;
+                border-radius:2px; align-items:center; }
+  .queue-item:last-child { margin-bottom:0; }
+  .queue-name { flex:1; font-size:13px; font-weight:600; }
+  .queue-remove { flex:0 0 auto; padding:2px 6px; background:var(--warn); color:#fff;
+                  border:none; font:inherit; font-size:11px; cursor:pointer; border-radius:2px; }
+  .table-wrapper { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; padding:10px 12px; background:var(--paper); border-bottom:1px solid var(--rule);
+       font-weight:600; color:var(--ink); }
+  td { padding:10px 12px; border-bottom:1px solid var(--rule); }
+  tr:hover { background:#f8f6f3; }
+  input[type=text] { width:100%; padding:4px 6px; border:1px solid var(--rule);
+                     background:#fff; font:inherit; font-size:12px; border-radius:2px; }
+  select { padding:4px 6px; border:1px solid var(--rule); background:#fff;
+           font:inherit; font-size:12px; border-radius:2px; }
+  .row-remove { padding:2px 6px; background:var(--warn); color:#fff;
+                border:none; font:inherit; font-size:11px; cursor:pointer; border-radius:2px; }
+  .footer { display:flex; gap:12px; margin-top:24px; justify-content:flex-end; }
+  .footer button { padding:10px 20px; font:inherit; font-size:14px; cursor:pointer; border-radius:2px; }
+  .save { background:var(--good); color:#fff; border:1px solid var(--good); }
+  .cancel { background:transparent; color:var(--ink); border:1px solid var(--rule); }
+  .status { font-size:12px; color:var(--soft); margin-top:8px; }
+  .error { color:var(--warn); }
+  .success { color:var(--good); }
+</style>
+
+<div class="container">
+  <h1>Game picker</h1>
+
+  <div class="header">
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="Search RAWG (e.g. Spider-Man)">
+      <div class="search-results" id="searchResults" style="display:none;"></div>
+      <div class="status" id="searchStatus"></div>
+    </div>
+    <div class="bulk-controls">
+      <label>Platform
+        <select id="bulkPlatform">
+          <option value="PS5">PS5</option>
+          <option value="PS4">PS4</option>
+        </select>
+      </label>
+      <label>Mode
+        <select id="bulkMode">
+          <option value="custom">Custom art</option>
+          <option value="auto">Auto fetched</option>
+          <option value="raw">Raw image</option>
+        </select>
+      </label>
+      <button class="bulk-apply" id="bulkApply">Apply to selected</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div>
+      <h2>Selected queue</h2>
+      <div class="queue" id="queue"></div>
+    </div>
+    <div>
+      <h2>Current games.txt</h2>
+      <div class="table">
+        <div class="table-wrapper">
+          <table id="gamesTable">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Platform</th>
+                <th>Mode</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <button class="cancel" onclick="location.reload()">Cancel</button>
+    <button class="save" id="saveBtn">Save to games.txt</button>
+  </div>
+
+  <div class="status" id="globalStatus"></div>
+</div>
+
+<script>
+const state = {
+  queue: [],       // { title, platform, mode }
+  allGames: [],    // from games.txt
+};
+
+async function init() {
+  await loadExistingGames();
+}
+
+async function loadExistingGames() {
+  try {
+    const r = await fetch("/api/games");
+    const { games, error } = await r.json();
+    if (error) throw new Error(error);
+    state.allGames = games || [];
+    renderGamesTable();
+  } catch (e) {
+    showStatus(`Failed to load games.txt: ${e.message}`, "error");
+  }
+}
+
+function showStatus(msg, type = "") {
+  const el = document.getElementById("globalStatus");
+  el.textContent = msg;
+  el.className = `status ${type}`;
+}
+
+const searchInput = document.getElementById("searchInput");
+const searchResults = document.getElementById("searchResults");
+const searchStatus = document.getElementById("searchStatus");
+
+searchInput.addEventListener("input", async (e) => {
+  const q = e.target.value.trim();
+  if (!q) {
+    searchResults.style.display = "none";
+    return;
+  }
+  searchStatus.textContent = "Searching…";
+  try {
+    const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const { hits, error } = await r.json();
+    if (error) throw new Error(error);
+    searchResults.innerHTML = (hits || []).map((g) => {
+      const plats = g.platforms?.length ? g.platforms.join(", ") : "unknown";
+      return `
+        <div class="result-item">
+          <input type="checkbox" data-idx="${hits.indexOf(g)}" data-name="${escapeHtml(g.name)}" data-plats="${plats}">
+          <div class="result-info">
+            <div class="result-name">${escapeHtml(g.name)}</div>
+            <div class="result-plats">${escapeHtml(plats)}</div>
+          </div>
+        </div>
+      `;
+    }).join("");
+    searchResults.style.display = hits?.length ? "block" : "none";
+    searchStatus.textContent = "";
+
+    // Wire checkboxes
+    searchResults.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+      cb.addEventListener("change", (e) => {
+        if (e.target.checked) {
+          state.queue.push({ title: e.target.dataset.name, platform: "PS5", mode: "custom" });
+        } else {
+          state.queue = state.queue.filter((g) => g.title !== e.target.dataset.name);
+        }
+        renderQueue();
+      });
+    });
+  } catch (e) {
+    searchStatus.textContent = e.message;
+  }
+});
+
+function renderQueue() {
+  const queueEl = document.getElementById("queue");
+  if (!state.queue.length) {
+    queueEl.innerHTML = "<p style='color:var(--soft); margin:0;'>No games selected yet.</p>";
+    return;
+  }
+  queueEl.innerHTML = state.queue.map((g, i) => `
+    <div class="queue-item">
+      <div class="queue-name">${escapeHtml(g.title)}</div>
+      <button class="queue-remove" onclick="removeFromQueue(${i})">Remove</button>
+    </div>
+  `).join("");
+}
+
+function removeFromQueue(idx) {
+  state.queue.splice(idx, 1);
+  renderQueue();
+}
+
+document.getElementById("bulkApply").addEventListener("click", () => {
+  const platform = document.getElementById("bulkPlatform").value;
+  const mode = document.getElementById("bulkMode").value;
+  state.queue.forEach((g) => {
+    g.platform = platform;
+    g.mode = mode;
+  });
+  showStatus(`Applied ${platform} / ${mode} to ${state.queue.length} game(s).`, "success");
+});
+
+function renderGamesTable() {
+  const tbody = document.querySelector("table tbody");
+  const combined = [...state.allGames];
+  // Add queued games that aren't already in the table
+  state.queue.forEach((q) => {
+    if (!combined.find((g) => g.title === q.title)) {
+      combined.push(q);
+    }
+  });
+  tbody.innerHTML = combined.map((g, i) => `
+    <tr>
+      <td><input type="text" data-field="title" data-idx="${i}" value="${escapeHtml(g.title)}" style="width:100%;"></td>
+      <td>
+        <select data-field="platform" data-idx="${i}">
+          <option ${g.platform === "PS5" ? "selected" : ""}>PS5</option>
+          <option ${g.platform === "PS4" ? "selected" : ""}>PS4</option>
+        </select>
+      </td>
+      <td>
+        <select data-field="mode" data-idx="${i}">
+          <option value="custom" ${g.mode === "custom" ? "selected" : ""}>Custom art</option>
+          <option value="auto" ${g.mode === "auto" ? "selected" : ""}>Auto fetched</option>
+          <option value="raw" ${g.mode === "raw" ? "selected" : ""}>Raw image</option>
+        </select>
+      </td>
+      <td><button class="row-remove" onclick="removeRow(${i})">Remove</button></td>
+    </tr>
+  `).join("");
+
+  // Wire change handlers
+  tbody.querySelectorAll("input, select").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const field = e.target.dataset.field;
+      const value = e.target.value;
+      if (idx < state.allGames.length) {
+        state.allGames[idx][field] = value;
+      } else {
+        state.queue[idx - state.allGames.length][field] = value;
+      }
+    });
+  });
+}
+
+function removeRow(idx) {
+  if (idx < state.allGames.length) {
+    state.allGames.splice(idx, 1);
+  } else {
+    state.queue.splice(idx - state.allGames.length, 1);
+  }
+  renderGamesTable();
+}
+
+document.getElementById("saveBtn").addEventListener("click", async () => {
+  const games = [...state.allGames, ...state.queue];
+  try {
+    const r = await fetch("/api/games", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ games }),
+    });
+    const { ok, error } = await r.json();
+    if (error) throw new Error(error);
+    showStatus(`Saved ${games.length} game(s) to games.txt. Ready to run 'npm run build'.`, "success");
+  } catch (e) {
+    showStatus(`Failed to save: ${e.message}`, "error");
+  }
+});
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+renderQueue();
+init();
+</script>

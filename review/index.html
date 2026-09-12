@@ -118,12 +118,12 @@ function card(i) {
   return `<article class="card" id="c-${i.slug}">
     <div class="art">${i.files ? `<img src="/${i.files.wrap}?t=${Date.now()}" alt="">` : "<p style='color:#889'>No render</p>"}</div>
     <div class="meta">
-      <h2 class="title">${esc(i.title)}</h2>
-      <p class="sub">${i.platform || ""} · matched from “${esc(i.query || "")}” ·
-        <span class="pill ${i.status}">${(i.status || "").replace("_", " ")}</span>
-        ${i.qc ? " score " + i.qc.score : ""}</p>
-      <ul class="issues">${issues || "<li style='color:#5C6478'>No issues found.</li>"}</ul>
-      ${i.files ? `<div class="tweaks">
+      <h2 class=”title”>${esc(i.title)}</h2>
+      <p class=”sub”>${i.platform || “”} · ${i.mode || “auto”} · matched from “${esc(i.query || “”)}” ·
+        <span class=”pill ${i.status}”>${(i.status || “”).replace(“_”, “ “)}</span>
+        ${i.qc ? “ score “ + i.qc.score : “”}</p>
+      <ul class=”issues”>${issues || “<li style='color:#5C6478'>No issues found.</li>”}</ul>
+      ${i.files && i.mode !== “raw” ? `<div class=”tweaks”>
         <div class="row">
           <div><label>Title</label><input type="text" data-k="title" value="${esc(cfg.title || "")}"></div>
         </div>

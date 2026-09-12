@@ -36,9 +36,11 @@ function fakeArt() {
 const cfg = {
   ...DEFAULT_CFG,
   ...CASE,
+  layout: "ps5",
   platform: "PS5",
   title: "Smoke Test",
-  subtitle: "if you can read this, the renderer works",
+  tagline: "If you can read this, it works",
+  mark: "SR",
   edition: "Standard Edition",
   spineText: "Smoke Test",
   blurb:

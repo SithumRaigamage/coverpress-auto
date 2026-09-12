@@ -6,6 +6,9 @@
            auto              — use SteamGridDB / RAWG art only
 
   node pipeline.mjs build            fetch + compose + auto-check every game in games.txt
+  node pipeline.mjs build --panels   write individual front/back/spine panels instead of wrap
+  node pipeline.mjs build --platform PS4|PS5   override platform for every game
+  node pipeline.mjs select           interactive game picker from RAWG search
   node pipeline.mjs prompts          write art prompts to art/<slug>/PROMPTS.md
   node pipeline.mjs review           open the manual review queue on :5173
   node pipeline.mjs print            build a print sheet of everything approved
@@ -18,8 +21,8 @@ import path from "node:path";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
-import { renderScene, DEFAULT_CFG, DPMM, CASE } from "./lib/render.mjs";
-import { rawgLookup, sgdbCover, llmCopy, llmReview, llmArtPrompt, listFreeModels, fetchBuffer } from "./lib/sources.mjs";
+import { renderScene, renderPanel, renderRawPanel, DEFAULT_CFG, DPMM, CASE } from "./lib/render.mjs";
+import { rawgLookup, sgdbCover, llmCopy, llmReview, llmArtPrompt, listFreeModels, fetchBuffer, searchGames } from "./lib/sources.mjs";
 import { runChecks, mergeVision } from "./lib/qc.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -27,6 +30,11 @@ const OUT = path.join(ROOT, "out");
 const ART = path.join(ROOT, "art");
 const CACHE = path.join(OUT, ".cache");
 const MANIFEST = path.join(OUT, "manifest.json");
+
+// auto = PS4 games get the PS4 look (accent band, black bottom block),
+// PS5 games get the PS5 look (white band, white bottom block).
+// ps4 / ps5 = force one look across every cover regardless of platform.
+const LAYOUT = (process.env.COVER_LAYOUT || "auto").toLowerCase();
 
 const ENV = {
   rawg: process.env.RAWG_KEY,
@@ -119,12 +127,28 @@ async function renderCover(cfg, imagePaths, { bleed = ENV.bleed } = {}) {
   return { canvas: cv, ctx, art };
 }
 
+/* --------------------------------------------------------- parseGamesTxt */
+
+function parseGamesTxt(text) {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"))
+    .map((line) => {
+      const [rawTitle, rawPlatform, rawMode] = line.split("|").map((s) => s.trim());
+      const platform = rawPlatform || "PS5";
+      const mode = rawMode === "auto" ? "auto" : rawMode === "raw" ? "raw" : "custom";
+      return { title: rawTitle, platform, mode, line };
+    });
+}
+
 /* --------------------------------------------------------------- build */
 
 async function buildOne(line, force) {
-  const [rawTitle, rawPlatform, rawMode] = line.split("|").map((s) => s.trim());
-  const platform = (rawPlatform || "PS5").toUpperCase();
-  const mode = rawMode === "auto" ? "auto" : "custom"; // default: custom
+  const { title: rawTitle, platform: rawPlatform, mode: rawMode } = parseGamesTxt(line)[0] || {};
+  if (!rawTitle) return null; // skip empty lines
+  const platform = platformOverride || rawPlatform.toUpperCase();
+  const mode = rawMode;
   const slug = slugify(`${rawTitle}-${platform}`);
   const dir = path.join(OUT, slug);
   const cachePath = path.join(CACHE, `${slug}.json`);
@@ -143,77 +167,98 @@ async function buildOne(line, force) {
 
   let meta, copy, imagePaths;
 
-  if (cached) {
-    ({ meta, copy, imagePaths } = cached);
-    log(`  cache hit`);
+  // For raw mode, skip expensive RAWG/LLM calls — just need metadata and art paths.
+  // Cache is still used to avoid re-fetching images on rebuilds.
+  if (mode === "raw") {
+    if (cached) {
+      ({ meta, imagePaths } = cached);
+      log(`  cache hit`);
+    } else {
+      meta = await rawgLookup(rawTitle, platform, ENV.rawg);
+      if (!meta) throw new Error(`RAWG found nothing for "${rawTitle}" on ${platform}`);
+      meta.query = rawTitle;
+      log(`  matched ${meta.name}${meta.exactMatch ? "" : "  (inexact)"}`);
+      imagePaths = { front: null, back: null, shots: [] };
+      const grid = await sgdbCover(meta.name, ENV.sgdb).catch(() => null);
+      if (grid) log(`  SteamGridDB grid ${grid.width}x${grid.height}`);
+      const frontUrl = grid?.url || meta.heroUrl;
+      if (frontUrl) {
+        const p = path.join(dir, "front-src.png");
+        await fs.writeFile(p, await fetchBuffer(frontUrl));
+        imagePaths.front = p;
+      }
+      if (meta.heroUrl && grid) {
+        const p = path.join(dir, "back-src.jpg");
+        await fs.writeFile(p, await fetchBuffer(meta.heroUrl));
+        imagePaths.back = p;
+      }
+      await fs.writeFile(cachePath, JSON.stringify({ meta, imagePaths }, null, 2));
+    }
   } else {
-    meta = await rawgLookup(rawTitle, platform, ENV.rawg);
-    if (!meta) throw new Error(`RAWG found nothing for "${rawTitle}" on ${platform}`);
-    log(`  matched ${meta.name}${meta.exactMatch ? "" : "  (inexact)"}`);
+    // auto / custom: full pipeline with copy and art prompts
+    if (cached) {
+      ({ meta, copy, imagePaths } = cached);
+      log(`  cache hit`);
+    } else {
+      meta = await rawgLookup(rawTitle, platform, ENV.rawg);
+      if (!meta) throw new Error(`RAWG found nothing for "${rawTitle}" on ${platform}`);
+      meta.query = rawTitle;
+      log(`  matched ${meta.name}${meta.exactMatch ? "" : "  (inexact)"}`);
 
-    const grid = await sgdbCover(meta.name, ENV.sgdb).catch(() => null);
-    if (grid) log(`  SteamGridDB grid ${grid.width}x${grid.height}`);
+      const grid = await sgdbCover(meta.name, ENV.sgdb).catch(() => null);
+      if (grid) log(`  SteamGridDB grid ${grid.width}x${grid.height}`);
 
-    imagePaths = { front: null, back: null, shots: [] };
-    const frontUrl = grid?.url || meta.heroUrl;
-    if (frontUrl) {
-      const p = path.join(dir, "front-src.png");
-      await fs.writeFile(p, await fetchBuffer(frontUrl));
-      imagePaths.front = p;
+      imagePaths = { front: null, back: null, shots: [] };
+      const frontUrl = grid?.url || meta.heroUrl;
+      if (frontUrl) {
+        const p = path.join(dir, "front-src.png");
+        await fs.writeFile(p, await fetchBuffer(frontUrl));
+        imagePaths.front = p;
+      }
+      if (meta.heroUrl && grid) {
+        const p = path.join(dir, "back-src.jpg");
+        await fs.writeFile(p, await fetchBuffer(meta.heroUrl));
+        imagePaths.back = p;
+      }
+      for (const [i, url] of meta.shotUrls.entries()) {
+        const p = path.join(dir, `shot-${i}.jpg`);
+        await fs.writeFile(p, await fetchBuffer(url));
+        imagePaths.shots.push(p);
+        await sleep(150);
+      }
+
+      copy = await llmCopy(meta, llmOpts("text")).catch((e) => {
+        log(`  LLM copy failed (${e.message}) — falling back to the RAWG description`);
+        return null;
+      });
+
+      await fs.writeFile(cachePath, JSON.stringify({ meta, copy, imagePaths }, null, 2));
     }
-    if (meta.heroUrl && grid) {
-      const p = path.join(dir, "back-src.jpg");
-      await fs.writeFile(p, await fetchBuffer(meta.heroUrl));
-      imagePaths.back = p;
-    }
-    for (const [i, url] of meta.shotUrls.entries()) {
-      const p = path.join(dir, `shot-${i}.jpg`);
-      await fs.writeFile(p, await fetchBuffer(url));
-      imagePaths.shots.push(p);
-      await sleep(150);
-    }
-
-    copy = await llmCopy(meta, llmOpts("text")).catch((e) => {
-      log(`  LLM copy failed (${e.message}) — falling back to the RAWG description`);
-      return null;
-    });
-
-    await fs.writeFile(cachePath, JSON.stringify({ meta, copy, imagePaths }, null, 2));
   }
 
   // Generate art prompts for art/<slug>/PROMPTS.md — cached to out/<slug>/PROMPTS.json
   // so no extra LLM calls on rebuild. The PROMPTS.md is regenerated from the JSON.
+  // Skip for raw mode (no template drawn, so prompts are wasted API budget).
   const promptsJsonPath = path.join(dir, "PROMPTS.json");
   const promptsMdPath = path.join(artDir, "PROMPTS.md");
   let artPrompts = null;
-  try {
-    if (!force) {
-      const existing = await fs.readFile(promptsJsonPath, "utf8");
-      artPrompts = JSON.parse(existing);
+  if (mode !== "raw") {
+    try {
+      if (!force) {
+        const existing = await fs.readFile(promptsJsonPath, "utf8");
+        artPrompts = JSON.parse(existing);
+      }
+    } catch {}
+    if (!artPrompts && ENV.key) {
+      artPrompts = await llmArtPrompt(meta, llmOpts("text")).catch(() => null);
+      if (artPrompts) {
+        await fs.writeFile(promptsJsonPath, JSON.stringify(artPrompts, null, 2));
+        await writePromptsMd(promptsMdPath, meta, platform, artPrompts);
+        log(`  art prompts written  art/${slug}/PROMPTS.md`);
+      }
+      await sleep(ENV.gap);
     }
-  } catch {}
-  if (!artPrompts && ENV.key) {
-    artPrompts = await llmArtPrompt(meta, llmOpts("text")).catch(() => null);
-    if (artPrompts) {
-      await fs.writeFile(promptsJsonPath, JSON.stringify(artPrompts, null, 2));
-      await writePromptsMd(promptsMdPath, meta, platform, artPrompts);
-      log(`  art prompts written  art/${slug}/PROMPTS.md`);
-    }
-    await sleep(ENV.gap);
   }
-
-  const cfg = {
-    ...DEFAULT_CFG,
-    ...CASE,
-    platform,
-    title: meta.name,
-    subtitle: copy?.tagline || "",
-    spineText: meta.name,
-    blurb: copy?.blurb || meta.description.split("\n")[0]?.slice(0, 520) || "",
-    features: (copy?.features || meta.genres).slice(0, 4).join("\n"),
-    publisher: meta.publisher,
-    rating: meta.rating,
-  };
 
   // art/<slug>/front.png overrides whatever was fetched, and is re-checked on every build.
   const custom = await localArt(slug);
@@ -232,9 +277,97 @@ async function buildOne(line, force) {
 
   const paths = { front: useFront, back: useBack, shots: useShots };
 
+  // Raw mode: just the image, no template.
+  if (mode === "raw") {
+    const art = { front: null, back: null };
+    if (paths.front) art.front = await loadImage(paths.front);
+    if (paths.back) art.back = await loadImage(paths.back);
+
+    let qc = runChecks({ cfg: {}, meta, art, ctx: null, pxPerMm: DPMM, mode: "raw" });
+
+    const files = {};
+    if (art.front) {
+      const frontCv = renderRawPanel("front", art, { bleed: ENV.bleed });
+      const frontPng = frontCv.toBuffer("image/png");
+      await fs.writeFile(path.join(dir, "front.png"), frontPng);
+      files.front = `${slug}/front.png`;
+      files.wrap = `${slug}/front.png`; // Reuse front for review thumbnail.
+    }
+    if (art.back) {
+      const backCv = renderRawPanel("back", art, { bleed: ENV.bleed });
+      const backPng = backCv.toBuffer("image/png");
+      await fs.writeFile(path.join(dir, "back.png"), backPng);
+      files.back = `${slug}/back.png`;
+    }
+
+    log(`  raw mode rendered  front.png${art.back ? " back.png" : ""}`);
+
+    return {
+      slug,
+      title: meta.name,
+      query: rawTitle,
+      platform,
+      mode,
+      cfg: {},
+      imagePaths: paths,
+      customArt: !!custom.front,
+      files,
+      qc,
+      status: qc.status,
+      decision: null,
+      builtAt: new Date().toISOString(),
+    };
+  }
+
+  // auto / custom: full template rendering
+  // Every template slot gets a value even with no language model configured (or a failed
+  // call), so the layout is identical for every game in games.txt regardless of copy status.
+  const year = meta.released ? meta.released.slice(0, 4) : "";
+  const fallbackTagline = [meta.genres.slice(0, 2).join(" · ").toUpperCase(), year].filter(Boolean).join(" · ");
+  const fallbackFeatures = [
+    ...meta.genres.slice(0, 3),
+    year ? `Released ${year}` : null,
+    meta.metacritic ? `Metacritic ${meta.metacritic}` : null,
+  ].filter(Boolean).slice(0, 4);
+  const fallbackBlurb =
+    meta.description.split("\n").filter((l) => l.trim())[0]?.slice(0, 520) ||
+    `${meta.name}${year ? `, released ${year}` : ""}. ${meta.genres.join(", ")}.`;
+
+  const cfg = {
+    ...DEFAULT_CFG,
+    ...CASE,
+    layout: LAYOUT === "auto" ? (platform === "PS4" ? "ps4" : "ps5") : LAYOUT,
+    platform,
+    title: meta.name,
+    // The renderer only ever draws cfg.subtitle, never cfg.edition directly — wire it
+    // here so the "Standard Edition" line under the title actually appears on covers.
+    subtitle: process.env.COVER_EDITION || DEFAULT_CFG.edition,
+    tagline: copy?.tagline || fallbackTagline,
+    spineText: meta.name,
+    blurb: copy?.blurb || fallbackBlurb,
+    features: (copy?.features?.length ? copy.features : fallbackFeatures).slice(0, 4).join("\n"),
+    publisher: meta.publisher,
+    mark: process.env.COVER_MARK || "",
+    address: process.env.COVER_ADDRESS || DEFAULT_CFG.address,
+    accent: process.env.COVER_ACCENT || DEFAULT_CFG.accent,
+    rating: meta.rating,
+  };
+
   const { canvas, ctx, art } = await renderCover(cfg, paths);
   const png = canvas.toBuffer("image/png");
-  await fs.writeFile(path.join(dir, "wrap.png"), png);
+
+  if (panelsOnly) {
+    // Write individual panels instead of the full wrap.
+    const panelNames = ["front", "back", "spine"];
+    for (const pn of panelNames) {
+      const pCv = renderPanel(pn, cfg, art, { bleed: ENV.bleed });
+      const pPng = pCv.toBuffer("image/png");
+      await fs.writeFile(path.join(dir, `${pn}-panel.png`), pPng);
+    }
+    log(`  panels written  front-panel.png back-panel.png spine-panel.png`);
+  } else {
+    await fs.writeFile(path.join(dir, "wrap.png"), png);
+  }
 
   // Front panel only, for the vision check and the review thumbnail.
   const fw = Math.round(cfg.panelW * DPMM);
@@ -273,10 +406,8 @@ async function buildOne(line, force) {
 
 async function build(force) {
   if (!ENV.rawg) throw new Error("RAWG_KEY is not set. Get a free key at https://rawg.io/apidocs");
-  const list = (await fs.readFile(path.join(ROOT, "games.txt"), "utf8"))
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#"));
+  const gamesTxt = await fs.readFile(path.join(ROOT, "games.txt"), "utf8");
+  const list = parseGamesTxt(gamesTxt).map((g) => g.line);
 
   const prev = await readManifest();
   const items = [];
@@ -285,6 +416,7 @@ async function build(force) {
     log(`[${i + 1}/${list.length}] ${line}`);
     try {
       const item = await buildOne(line, force);
+      if (!item) continue; // skip empty lines
       // A cover already approved by hand keeps its decision through a rebuild.
       const old = prev.items.find((p) => p.slug === item.slug);
       if (old?.decision === "approved" && old.builtAt) item.decision = "approved";
@@ -292,6 +424,7 @@ async function build(force) {
       log(`  ${item.status}  score ${item.qc.score}  (${item.qc.issues.length} note${item.qc.issues.length === 1 ? "" : "s"})`);
     } catch (e) {
       log(`  failed: ${e.message}`);
+      log(`  stack: ${e.stack.split("\n").slice(0, 5).join("\n  ")}`);
       items.push({ slug: slugify(line), title: line, status: "failed", error: e.message, qc: { issues: [{ level: "fail", msg: e.message }], score: 0 }, decision: null });
     }
     await sleep(400); // RAWG asks for roughly one request per second
@@ -367,7 +500,7 @@ async function review() {
 
 async function printSheet() {
   const m = await readManifest();
-  const ready = m.items.filter((i) => i.decision === "approved" || (i.status === "auto_approved" && i.decision !== "rejected"));
+  const ready = m.items.filter((i) => (i.decision === "approved" || (i.status === "auto_approved" && i.decision !== "rejected")) && i.mode !== "raw");
   if (!ready.length) return log("Nothing approved yet.");
 
   const wrapW = CASE.panelW * 2 + CASE.spine + ENV.bleed * 2;
@@ -542,17 +675,90 @@ async function models() {
   log(`\nThe free list rotates, so re-run this if a model starts 404ing.`);
 }
 
+/* --------------------------------------------------------------- pick */
+
+/** Web-based game picker: search RAWG, edit games.txt visually. */
+async function pick() {
+  if (!ENV.rawg) throw new Error("RAWG_KEY is not set. Get a free key at https://rawg.io/apidocs");
+
+  const pickerHtml = await fs.readFile(path.join(ROOT, "picker", "index.html"));
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, "http://localhost");
+
+    if (url.pathname === "/") {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      return res.end(pickerHtml);
+    }
+
+    if (url.pathname === "/api/search") {
+      const q = url.searchParams.get("q");
+      if (!q) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "Missing q parameter" }));
+      }
+      try {
+        const hits = await searchGames(q, ENV.rawg);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ hits }));
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    }
+
+    if (url.pathname === "/api/games" && req.method === "GET") {
+      try {
+        const txt = await fs.readFile(path.join(ROOT, "games.txt"), "utf8");
+        const games = parseGamesTxt(txt);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ games }));
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    }
+
+    if (url.pathname === "/api/games" && req.method === "POST") {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", async () => {
+        try {
+          const { games } = JSON.parse(body || "{}");
+          if (!Array.isArray(games)) throw new Error("games must be an array");
+          const lines = games.map((g) => `${g.title} | ${g.platform} | ${g.mode}`);
+          await fs.writeFile(path.join(ROOT, "games.txt"), lines.join("\n") + "\n");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    }
+
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  server.listen(5174, () => log("Game picker on http://localhost:5174"));
+}
+
 /* ---------------------------------------------------------------- main */
 
 const cmd = process.argv[2] || "build";
 const force = process.argv.includes("--force");
+const platformOverride = process.argv.includes("--platform") ? (process.argv[process.argv.indexOf("--platform") + 1] || "").toUpperCase() : "";
+const panelsOnly = process.argv.includes("--panels");
+
 try {
   if (cmd === "build") await build(force);
   else if (cmd === "review") await review();
   else if (cmd === "print") await printSheet();
   else if (cmd === "prompts") await prompts(process.argv.includes("--missing"));
   else if (cmd === "models") await models();
-  else log("Commands: build | review | print | prompts | models");
+  else if (cmd === "select") await pick();
+  else log("Commands: build | review | print | prompts | models | select");
 } catch (e) {
   console.error(`\n${e.message}`);
   process.exit(1);

@@ -1,7 +1,8 @@
 # Format: Title | Platform | mode
 # Modes:
 #   custom  (recommended) — use art/<slug>/front.png; if missing, fall back to scraped art
-#   auto                 — use scraped art from SteamGridDB / RAWG
+#   auto                 — use scraped art from SteamGridDB / RAWG only
+#   raw                  — export just the image, no template (no band, title, specs, etc.)
 #
 # Pipeline:
 #   1. Add your game here
@@ -11,3 +12,5 @@
 #   5. npm run build      — uses your art; the printed cover is ready
 
 Marvel's Spider-Man 2 (2023) | PS5 | custom
+Assassin's Creed Odyssey | PS4 | auto
+
