@@ -8,9 +8,7 @@
   node pipeline.mjs build            fetch + compose + auto-check every game in games.txt
   node pipeline.mjs build --panels   write individual front/back/spine panels instead of wrap
   node pipeline.mjs build --platform PS4|PS5   override platform for every game
-  node pipeline.mjs select           interactive game picker from RAWG search
   node pipeline.mjs prompts          write art prompts to art/<slug>/PROMPTS.md
-  node pipeline.mjs review           open the manual review queue on :5173
   node pipeline.mjs print            build a print sheet of everything approved
   node pipeline.mjs models           list OpenRouter :free models and which take images
   node pipeline.mjs build --force    ignore the cache
@@ -18,11 +16,11 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import http from "node:http";
 import { fileURLToPath } from "node:url";
-import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
-import { renderScene, renderPanel, renderRawPanel, DEFAULT_CFG, DPMM, CASE } from "./lib/render.mjs";
-import { rawgLookup, sgdbCover, llmCopy, llmReview, llmArtPrompt, listFreeModels, fetchBuffer, searchGames } from "./lib/sources.mjs";
+import { loadImage } from "@napi-rs/canvas";
+import { renderPanel, renderRawPanel, DEFAULT_CFG, DPMM, CASE } from "./lib/render.mjs";
+import { composeCover } from "./lib/cover.mjs";
+import { rawgLookup, sgdbCover, llmCopy, llmReview, llmArtPrompt, listFreeModels, fetchBuffer } from "./lib/sources.mjs";
 import { runChecks, mergeVision } from "./lib/qc.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -102,29 +100,6 @@ async function readManifest() {
   } catch {
     return { generated: null, items: [] };
   }
-}
-
-/* ------------------------------------------------------------ rendering */
-
-async function renderCover(cfg, imagePaths, { bleed = ENV.bleed } = {}) {
-  const wrapW = cfg.panelW * 2 + cfg.spine;
-  const cv = createCanvas(Math.round((wrapW + bleed * 2) * DPMM), Math.round((cfg.panelH + bleed * 2) * DPMM));
-  const ctx = cv.getContext("2d");
-  ctx.setTransform(DPMM, 0, 0, DPMM, bleed * DPMM, bleed * DPMM);
-
-  const art = {
-    front: imagePaths.front ? await loadImage(imagePaths.front) : null,
-    back: imagePaths.back ? await loadImage(imagePaths.back) : null,
-    shots: [],
-  };
-  for (const p of imagePaths.shots || []) {
-    try {
-      art.shots.push(await loadImage(p));
-    } catch {}
-  }
-
-  renderScene(ctx, cfg, art, { bleed, cropMarks: bleed > 0 });
-  return { canvas: cv, ctx, art };
 }
 
 /* --------------------------------------------------------- parseGamesTxt */
@@ -319,70 +294,45 @@ async function buildOne(line, force) {
     };
   }
 
-  // auto / custom: full template rendering
-  // Every template slot gets a value even with no language model configured (or a failed
-  // call), so the layout is identical for every game in games.txt regardless of copy status.
-  const year = meta.released ? meta.released.slice(0, 4) : "";
-  const fallbackTagline = [meta.genres.slice(0, 2).join(" · ").toUpperCase(), year].filter(Boolean).join(" · ");
-  const fallbackFeatures = [
-    ...meta.genres.slice(0, 3),
-    year ? `Released ${year}` : null,
-    meta.metacritic ? `Metacritic ${meta.metacritic}` : null,
-  ].filter(Boolean).slice(0, 4);
-  const fallbackBlurb =
-    meta.description.split("\n").filter((l) => l.trim())[0]?.slice(0, 520) ||
-    `${meta.name}${year ? `, released ${year}` : ""}. ${meta.genres.join(", ")}.`;
-
-  const cfg = {
-    ...DEFAULT_CFG,
-    ...CASE,
-    layout: LAYOUT === "auto" ? (platform === "PS4" ? "ps4" : "ps5") : LAYOUT,
-    platform,
-    title: meta.name,
-    // The renderer only ever draws cfg.subtitle, never cfg.edition directly — wire it
-    // here so the "Standard Edition" line under the title actually appears on covers.
-    subtitle: process.env.COVER_EDITION || DEFAULT_CFG.edition,
-    tagline: copy?.tagline || fallbackTagline,
-    spineText: meta.name,
-    blurb: copy?.blurb || fallbackBlurb,
-    features: (copy?.features?.length ? copy.features : fallbackFeatures).slice(0, 4).join("\n"),
-    publisher: meta.publisher,
+  // auto / custom: full template rendering. Config construction and the QC pass
+  // live in lib/cover.mjs so the CLI and the SaaS worker cannot drift apart —
+  // that drift is what once left `edition` defined but never drawn.
+  const theme = {
+    layout: LAYOUT,
+    accent: process.env.COVER_ACCENT || DEFAULT_CFG.accent,
     mark: process.env.COVER_MARK || "",
     address: process.env.COVER_ADDRESS || DEFAULT_CFG.address,
-    accent: process.env.COVER_ACCENT || DEFAULT_CFG.accent,
-    rating: meta.rating,
+    edition: process.env.COVER_EDITION || DEFAULT_CFG.edition,
   };
 
-  const { canvas, ctx, art } = await renderCover(cfg, paths);
-  const png = canvas.toBuffer("image/png");
+  const out = await composeCover({
+    meta,
+    copy,
+    platform,
+    title: meta.name,
+    theme,
+    artPaths: paths,
+    bleed: ENV.bleed,
+  });
+  const cfg = out.cfg;
 
   if (panelsOnly) {
     // Write individual panels instead of the full wrap.
-    const panelNames = ["front", "back", "spine"];
-    for (const pn of panelNames) {
-      const pCv = renderPanel(pn, cfg, art, { bleed: ENV.bleed });
-      const pPng = pCv.toBuffer("image/png");
-      await fs.writeFile(path.join(dir, `${pn}-panel.png`), pPng);
+    for (const pn of ["front", "back", "spine"]) {
+      const pCv = renderPanel(pn, cfg, out.art, { bleed: ENV.bleed });
+      await fs.writeFile(path.join(dir, `${pn}-panel.png`), pCv.toBuffer("image/png"));
     }
     log(`  panels written  front-panel.png back-panel.png spine-panel.png`);
   } else {
-    await fs.writeFile(path.join(dir, "wrap.png"), png);
+    await fs.writeFile(path.join(dir, "wrap.png"), out.wrapPng);
   }
 
-  // Front panel only, for the vision check and the review thumbnail.
-  const fw = Math.round(cfg.panelW * DPMM);
-  const fh = Math.round(cfg.panelH * DPMM);
-  const front = createCanvas(600, Math.round((600 * fh) / fw));
-  front
-    .getContext("2d")
-    .drawImage(canvas, Math.round((ENV.bleed + cfg.panelW + cfg.spine) * DPMM), Math.round(ENV.bleed * DPMM), fw, fh, 0, 0, front.width, front.height);
-  const frontPng = front.toBuffer("image/png");
-  await fs.writeFile(path.join(dir, "front.png"), frontPng);
+  await fs.writeFile(path.join(dir, "front.png"), out.frontPng);
 
-  let qc = runChecks({ cfg, meta, art, ctx, pxPerMm: DPMM });
+  let qc = out.qc;
 
   if (ENV.vision && ENV.key && qc.fails === 0) {
-    const vision = await llmReview(frontPng, meta.name, llmOpts("vision")).catch(() => null);
+    const vision = await llmReview(out.frontPng, meta.name, llmOpts("vision")).catch(() => null);
     qc = mergeVision(qc, vision, ENV.autoThreshold);
     await sleep(ENV.gap);
   }
@@ -437,63 +387,7 @@ async function build(force) {
   log(`\n${items.length} covers · ${by("auto_approved")} auto-approved · ${by("needs_review")} need review · ${by("failed")} failed`);
   if (withCustomArt.length) log(`  ${withCustomArt.length} cover(s) use your art from art/<slug>/`);
   log(`\nGenerate cover art:  npm run prompts   (writes art/<slug>/PROMPTS.md)`);
-  log(`Review queue:         node pipeline.mjs review`);
-}
-
-/* -------------------------------------------------------------- review */
-
-async function review() {
-  const reviewHtml = await fs.readFile(path.join(ROOT, "review", "index.html"));
-
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, "http://localhost");
-
-    if (url.pathname === "/") {
-      res.writeHead(200, { "Content-Type": "text/html" });
-      return res.end(reviewHtml);
-    }
-
-    if (url.pathname === "/api/manifest") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify(await readManifest()));
-    }
-
-    if (url.pathname === "/api/decide" && req.method === "POST") {
-      const body = JSON.parse(await new Promise((r) => {
-        let b = "";
-        req.on("data", (c) => (b += c));
-        req.on("end", () => r(b || "{}"));
-      }));
-      const m = await readManifest();
-      const item = m.items.find((i) => i.slug === body.slug);
-      if (item) {
-        item.decision = body.decision;
-        if (body.cfg) {
-          item.cfg = { ...item.cfg, ...body.cfg };
-          const { canvas } = await renderCover(item.cfg, item.imagePaths);
-          await fs.writeFile(path.join(OUT, item.slug, "wrap.png"), canvas.toBuffer("image/png"));
-        }
-        await fs.writeFile(MANIFEST, JSON.stringify(m, null, 2));
-      }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ ok: !!item }));
-    }
-
-    // static files out of out/
-    try {
-      const file = path.join(OUT, decodeURIComponent(url.pathname));
-      if (!file.startsWith(OUT)) throw new Error("nope");
-      const buf = await fs.readFile(file);
-      const ext = path.extname(file);
-      res.writeHead(200, { "Content-Type": ext === ".png" ? "image/png" : ext === ".json" ? "application/json" : "application/octet-stream" });
-      return res.end(buf);
-    } catch {
-      res.writeHead(404);
-      res.end("not found");
-    }
-  });
-
-  server.listen(5173, () => log("Review queue on http://localhost:5173"));
+  log(`Review and print:     npm run dev        (web app at http://127.0.0.1:3000)`);
 }
 
 /* --------------------------------------------------------------- print */
@@ -675,75 +569,6 @@ async function models() {
   log(`\nThe free list rotates, so re-run this if a model starts 404ing.`);
 }
 
-/* --------------------------------------------------------------- pick */
-
-/** Web-based game picker: search RAWG, edit games.txt visually. */
-async function pick() {
-  if (!ENV.rawg) throw new Error("RAWG_KEY is not set. Get a free key at https://rawg.io/apidocs");
-
-  const pickerHtml = await fs.readFile(path.join(ROOT, "picker", "index.html"));
-
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, "http://localhost");
-
-    if (url.pathname === "/") {
-      res.writeHead(200, { "Content-Type": "text/html" });
-      return res.end(pickerHtml);
-    }
-
-    if (url.pathname === "/api/search") {
-      const q = url.searchParams.get("q");
-      if (!q) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: "Missing q parameter" }));
-      }
-      try {
-        const hits = await searchGames(q, ENV.rawg);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ hits }));
-      } catch (e) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: e.message }));
-      }
-    }
-
-    if (url.pathname === "/api/games" && req.method === "GET") {
-      try {
-        const txt = await fs.readFile(path.join(ROOT, "games.txt"), "utf8");
-        const games = parseGamesTxt(txt);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ games }));
-      } catch (e) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        return res.end(JSON.stringify({ error: e.message }));
-      }
-    }
-
-    if (url.pathname === "/api/games" && req.method === "POST") {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", async () => {
-        try {
-          const { games } = JSON.parse(body || "{}");
-          if (!Array.isArray(games)) throw new Error("games must be an array");
-          const lines = games.map((g) => `${g.title} | ${g.platform} | ${g.mode}`);
-          await fs.writeFile(path.join(ROOT, "games.txt"), lines.join("\n") + "\n");
-          res.writeHead(200, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ ok: true }));
-        } catch (e) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          return res.end(JSON.stringify({ error: e.message }));
-        }
-      });
-    }
-
-    res.writeHead(404);
-    res.end("not found");
-  });
-
-  server.listen(5174, () => log("Game picker on http://localhost:5174"));
-}
-
 /* ---------------------------------------------------------------- main */
 
 const cmd = process.argv[2] || "build";
@@ -753,12 +578,10 @@ const panelsOnly = process.argv.includes("--panels");
 
 try {
   if (cmd === "build") await build(force);
-  else if (cmd === "review") await review();
   else if (cmd === "print") await printSheet();
   else if (cmd === "prompts") await prompts(process.argv.includes("--missing"));
   else if (cmd === "models") await models();
-  else if (cmd === "select") await pick();
-  else log("Commands: build | review | print | prompts | models | select");
+  else log("Commands: build | print | prompts | models");
 } catch (e) {
   console.error(`\n${e.message}`);
   process.exit(1);

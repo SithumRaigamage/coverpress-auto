@@ -5,6 +5,9 @@ node_modules/
 out/
 *.log
 
+# web app state: SQLite database, uploads, renders, generated secret
+data/
+
 # environment files
 .env
 .env.local
