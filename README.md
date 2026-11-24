@@ -40,9 +40,11 @@ account is created on first boot. Don't expose the port.
 3. **Pipeline run** (`/runs/:id`): eight steps with a live log, polled every second:
    fetch metadata, collect art, generate AI art (optional, off by default), pick front
    art, write copy, render, quality checks (deterministic checks plus llava), route.
-   - **Replay run** makes a *new variant*: the next-best art not used before, other
-     back-panel screenshots, freshly seeded copy, and a new title position with a
-     band colour sampled from the art.
+   - **Replay run** makes a *new variant*: art this cover hasn't used, from a
+     different source than last time (RAWG → SteamGridDB → AI), other back-panel
+     screenshots, freshly seeded copy, and a new title position with a band colour
+     sampled from the art. Once every SteamGridDB grid it knows has been used, it
+     fetches SteamGridDB's next page, so reruns keep bringing new art.
    - **Run again with same art** only re-renders.
 4. **Review queue** (`/review`): a five-column board (Queued, Building, Needs review,
    Approved, Failed). There is **one card per game and platform**; every run is a
@@ -172,6 +174,9 @@ npm run usage         # covers and projects used this month
 
 SQLite, cached art, renders and the generated secret key live in `data/`. Back that
 directory up.
+
+Postman: `postman/coverpress-apis.json` has the exact RAWG and SteamGridDB calls and the
+whole local API, including reruns (see `postman/README.md`).
 
 Docs: `docs/FRONTEND-PLAN.md`, `docs/SAAS-PLAN.md`, `docs/LEGAL-AND-VIABILITY.md`,
 `docs/USER-STORIES.md`.

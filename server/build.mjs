@@ -60,10 +60,18 @@ async function saveArt({ db, dataDir, coverId, slot, fileName, url, accountId, l
 
 const extOf = (url) => (/\.png(\?|$)/i.test(url) ? "png" : /\.webp(\?|$)/i.test(url) ? "webp" : "jpg");
 
-/** Next candidate for a variant: best fit not used before; when all are used, the least recently used. */
-export function nextUnused(candidates, used = []) {
-  const fresh = candidates.find((c) => !used.includes(c.url));
-  if (fresh) return { pick: fresh, cycled: false };
+/**
+ * Next candidate for a variant: the best fit not used before, preferring a
+ * different source from the last pick (RAWG → SteamGridDB → AI …), so reruns
+ * visibly change instead of walking through near-identical screenshots. When
+ * everything has been used, the least recently used comes back.
+ */
+export function nextUnused(candidates, used = [], { lastSource = null } = {}) {
+  const unused = candidates.filter((c) => !used.includes(c.url));
+  if (unused.length) {
+    const other = lastSource ? unused.find((c) => c.source && c.source !== lastSource) : null;
+    return { pick: other || unused[0], cycled: false };
+  }
   const byAge = [...candidates].sort((a, b) => used.indexOf(a.url) - used.indexOf(b.url));
   return { pick: byAge[0] || null, cycled: true };
 }
@@ -209,7 +217,22 @@ async function buildOnce({ db, dataDir, secret, accountId, coverId, cover, logge
       ranked = [wanted, ...candidates.filter((c) => c.url !== wanted.url)];
       note = " (your pick)";
     } else if (variant) {
-      const { pick, cycled } = nextUnused(candidates, used);
+      // Out of unused SteamGridDB grids? Ask SteamGridDB for its next page first.
+      const sgdbLeft = candidates.some((c) => c.source === "SteamGridDB" && c.kind === "portrait grid" && !used.includes(c.url));
+      if (!sgdbLeft && rawgId && catalog?.moreSgdb) {
+        const more = await catalog.moreSgdb(rawgId).catch((err) => {
+          reporter.log(`SteamGridDB: could not fetch more grids (${err.message}).`, "warn");
+          return { added: 0 };
+        });
+        if (more.added) {
+          const ai = candidates.filter((c) => c.source === "AI");
+          const fresh = (await catalog.art(rawgId)).items;
+          const urls = new Set(fresh.map((c) => c.url));
+          candidates = [...fresh, ...ai.filter((c) => !urls.has(c.url))].sort((a, b) => b.fit - a.fit);
+          reporter.log(`SteamGridDB: ${more.added} new grid${more.added === 1 ? "" : "s"} fetched for this run.`);
+        }
+      }
+      const { pick, cycled } = nextUnused(candidates, used, { lastSource: source.front?.source || null });
       ranked = pick ? [pick, ...candidates.filter((c) => c.url !== pick.url)] : candidates;
       note = cycled ? " (every candidate used — cycling)" : used.length ? ` (next best, ${used.length} used before)` : "";
     } else {

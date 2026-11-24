@@ -11,7 +11,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loadImage } from "@napi-rs/canvas";
-import { rawgGame, rawgSearch, sgdbArt, fetchBuffer } from "../lib/sources.mjs";
+import { rawgGame, rawgSearch, sgdbArt, sgdbGrids, SGDB_PAGE, fetchBuffer } from "../lib/sources.mjs";
 import { artFit } from "../lib/qc.mjs";
 import { coverCfg } from "../lib/cover.mjs";
 import { safeJoin } from "./http.mjs";
@@ -137,6 +137,42 @@ export function createCatalog({ dataDir, keys, onRawgCall = () => {}, logger = c
     });
   }
 
+  /**
+   * Fetch the next page of SteamGridDB grids into the cache. "Run again" calls
+   * this once every grid it knows has been used, so reruns keep bringing new
+   * art instead of cycling. Pages are tried in order; a page with nothing new
+   * (or a short page) marks the list as exhausted, and it is not asked again.
+   */
+  async function moreSgdb(rawgId) {
+    const key = keys.sgdb();
+    if (!key) return { added: 0, reason: "off" };
+    const n = id(rawgId);
+    return once(`sgdb-more-${n}`, async () => {
+      let cur = await readCache(`sgdb-${n}.json`);
+      if (!cur) {
+        const g = await game(rawgId);
+        await sgdb(rawgId, g.meta.name);
+        cur = await readCache(`sgdb-${n}.json`);
+      }
+      if (!cur?.gameId) return { added: 0, reason: "no_game" };
+      if (cur.exhausted) return { added: 0, reason: "exhausted" };
+      const seen = new Set((cur.items || []).map((i) => i.url));
+      let page = Number(cur.page ?? 0);
+      let fresh = [];
+      let last = { items: [] };
+      // Two tries: whether SteamGridDB counts pages from 0 or 1, one of them is new.
+      for (let tries = 0; tries < 2 && !fresh.length; tries++) {
+        page += 1;
+        last = await sgdbGrids(cur.gameId, key, { page });
+        fresh = last.items.filter((i) => !seen.has(i.url));
+        if (last.items.length < SGDB_PAGE) break;
+      }
+      const exhausted = !fresh.length || last.items.length < SGDB_PAGE;
+      await writeCache(`sgdb-${n}.json`, { ...cur, items: [...(cur.items || []), ...fresh], page, exhausted });
+      return { added: fresh.length, exhausted, page };
+    });
+  }
+
   /* --------------------------------------------------------------- art */
 
   const candidate = (source, kind, idPart, url, width, height, thumb) => {
@@ -230,5 +266,5 @@ export function createCatalog({ dataDir, keys, onRawgCall = () => {}, logger = c
   /** Local file for a generated-art URL, so the build reads it from disk. */
   const localFile = (url) => (generated ? generated.localFile(url) : null);
 
-  return { search, game, art, summary, fallbackCopy, cachedCopy, saveCopy, localFile };
+  return { search, game, art, moreSgdb, summary, fallbackCopy, cachedCopy, saveCopy, localFile };
 }
