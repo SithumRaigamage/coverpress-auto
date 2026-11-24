@@ -123,12 +123,35 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS usage_account ON usage_events(account_id, kind, created_at);
 `;
 
+/* Additive columns for databases created before they existed. Each is
+   nullable-with-default so an old row reads the same as a new one.
+
+   covers.source  JSON — where the cover came from and which art was picked:
+                  { rawgId, front: { url, source, kind, width, height } }.
+   jobs.progress  JSON — the pipeline step list the run screen draws.
+   jobs.log       JSON — timestamped log lines for the run screen. */
+const MIGRATIONS = [
+  ["covers", "source", "TEXT NOT NULL DEFAULT ''"],
+  ["jobs", "progress", "TEXT NOT NULL DEFAULT ''"],
+  ["jobs", "log", "TEXT NOT NULL DEFAULT ''"],
+  ["jobs", "started_at", "TEXT NOT NULL DEFAULT ''"],
+  ["jobs", "finished_at", "TEXT NOT NULL DEFAULT ''"],
+];
+
+function migrate(db) {
+  for (const [table, column, type] of MIGRATIONS) {
+    const has = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+    if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
 export function openDb(file) {
   if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  migrate(db);
   return db;
 }
 

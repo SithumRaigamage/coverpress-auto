@@ -53,6 +53,19 @@ export function quotaBlockReason(db, account, wanted = 1) {
   return null;
 }
 
+/** RAWG's free tier is 20,000 requests a month; every server-side call is counted. */
+export const RAWG_MONTHLY_LIMIT = 20000;
+
+export function rawgCallsThisMonth(db, accountId) {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM usage_events
+       WHERE account_id = ? AND kind = 'rawg.request' AND created_at >= ?`
+    )
+    .get(accountId, monthStart());
+  return Number(row?.n || 0);
+}
+
 export function recordUsage(db, accountId, kind, ref = "") {
   db.prepare("INSERT INTO usage_events (id, account_id, kind, ref, created_at) VALUES (?, ?, ?, ?, ?)").run(
     crypto.randomUUID(),
@@ -66,9 +79,10 @@ export function recordUsage(db, accountId, kind, ref = "") {
 /* --------------------------------------------------- provider keys (env) */
 
 // Keys are read from .env at boot; the browser has no way to set or overwrite
-// them. SteamGridDB is deliberately absent: its terms are personal,
-// non-commercial use only, so this service cannot hold a key for it.
-const KEY_ENV = { rawg: "RAWG_KEY", openrouter: "OPENROUTER_KEY" };
+// them.
+// SteamGridDB is personal, non-commercial use only. It is read from .env so a
+// local user can opt in; a hosted or paid deployment must leave SGDB_KEY unset.
+const KEY_ENV = { rawg: "RAWG_KEY", openrouter: "OPENROUTER_KEY", sgdb: "SGDB_KEY" };
 
 export function loadSecret(dataDir, envSecret) {
   if (envSecret && String(envSecret).length >= 16) {

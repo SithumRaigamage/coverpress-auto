@@ -24,9 +24,12 @@ import { openDb, nowIso } from "./db.mjs";
 import * as repo from "./repo.mjs";
 import * as auth from "./auth.mjs";
 import { buildCover } from "./build.mjs";
-import { createWorker, enqueueBuild, pendingJobs } from "./jobs.mjs";
-import { llmConfig, llmOpts, publicLlmConfig } from "./llm.mjs";
-import { listModels, rawgSearch } from "../lib/sources.mjs";
+import { createWorker, enqueueBuild, pendingJobs, latestJobForCover, activeJobs } from "./jobs.mjs";
+import { llmConfig, llmOpts, llmAvailable, publicLlmConfig } from "./llm.mjs";
+import { listModels, llmCopy, RAWG_ORDERING } from "../lib/sources.mjs";
+import { createCatalog } from "./catalog.mjs";
+import { PIPELINE_STEPS, jobRunDto, progressReporter } from "./progress.mjs";
+import { STYLES } from "../lib/cover.mjs";
 import { LEGAL } from "./legal.mjs";
 import {
   HttpError,
@@ -100,6 +103,21 @@ export function createApp(options = {}) {
   const account = () =>
     db.prepare("SELECT * FROM accounts WHERE id = ?").get(initialId) || { ...initial, plan: "free" };
 
+  // Every server-side RAWG request is counted against the 20k/month free tier.
+  const onRawgCall = () => auth.recordUsage(db, account().id, "rawg.request");
+  const catalog =
+    options.catalog ||
+    createCatalog({
+      dataDir,
+      keys: {
+        rawg: () => auth.providerKey(db, account().id, "rawg"),
+        // Personal use only — see docs/LEGAL-AND-VIABILITY.md. Off unless SGDB_KEY is set.
+        sgdb: () => auth.providerKey(db, account().id, "sgdb"),
+      },
+      onRawgCall,
+      logger,
+    });
+
   const worker = createWorker({
     db,
     intervalMs: options.workerIntervalMs ?? 300,
@@ -113,6 +131,10 @@ export function createApp(options = {}) {
         coverId: job.cover_id,
         logger,
         bleed,
+        reporter: progressReporter(db, job.id),
+        attempt: job.attempts,
+        catalog,
+        onRawgCall,
       }),
   });
 
@@ -136,6 +158,7 @@ export function createApp(options = {}) {
       limit: plan.coversPerMonth,
       projects: auth.projectCount(db, row.id),
       projectLimit: plan.projects,
+      rawg: { used: auth.rawgCallsThisMonth(db, row.id), limit: auth.RAWG_MONTHLY_LIMIT },
     };
   };
 
@@ -151,6 +174,8 @@ export function createApp(options = {}) {
 
   const coverDto = (c, extra = {}) => {
     const qc = parse(c.qc);
+    const source = parse(c.source) || {};
+    const overrides = parse(c.overrides) || {};
     return {
       id: c.id,
       projectId: c.project_id,
@@ -168,6 +193,13 @@ export function createApp(options = {}) {
       artUrl: c.art_path ? `/api/covers/${c.id}/art/front` : null,
       thumbUrl: c.render_id ? `/api/renders/${c.render_id}/front.png` : null,
       wrapUrl: c.render_id ? `/api/renders/${c.render_id}/wrap.png` : null,
+      projectName: c.project_name || null,
+      rawgId: Number.isInteger(source.rawgId) ? source.rawgId : null,
+      front: source.front
+        ? { source: source.front.source, kind: source.front.kind, width: source.front.width, height: source.front.height, fit: source.front.fit ?? null }
+        : null,
+      style: STYLES.has(overrides.style) ? overrides.style : "standard",
+      updatedAt: c.updated_at || null,
     };
   };
 
@@ -231,6 +263,14 @@ export function createApp(options = {}) {
         "GET /api/settings/llm",
         "GET /api/settings/models",
         "GET /api/rawg/search",
+        "GET /api/games/:rawgId",
+        "GET /api/games/:rawgId/art",
+        "POST /api/games/:rawgId/copy",
+        "POST /api/games/:rawgId/covers",
+        "GET /api/covers",
+        "POST /api/covers/batch",
+        "GET /api/covers/:id/run",
+        "GET /api/runs",
       ],
     });
   }
@@ -540,16 +580,41 @@ export function createApp(options = {}) {
     const names = auth.providerKeyNames(db, account().id);
     return sendJson(res, 200, {
       account: accountDto(),
-      keys: { rawg: names.has("rawg"), openrouter: names.has("openrouter") },
-      // Optional providers this deployment refuses to hold a key for, and why.
-      unsupported: [{ name: "sgdb", reason: "SteamGridDB terms allow personal, non-commercial use only." }],
+      keys: { rawg: names.has("rawg"), openrouter: names.has("openrouter"), sgdb: names.has("sgdb") },
+      // Providers with use restrictions the UI must state next to their status.
+      restrictions: [{ name: "sgdb", reason: "SteamGridDB terms allow personal, non-commercial use only. Leave SGDB_KEY unset in any hosted or paid deployment." }],
+      unsupported: [],
       storage: { dataDir: path.basename(dataDir), database: "sqlite" },
       llm: publicLlmConfig(llmConfig(db, account().id, secret)),
     });
   }
 
-  const getLlmSettings = async (req, res) =>
-    sendJson(res, 200, publicLlmConfig(llmConfig(db, account().id, secret)));
+  // The sidebar's "Ollama connected" dot must be real, so the LLM settings carry
+  // a reachability probe. Cached briefly: the sidebar asks on every page.
+  let probeCache = { at: 0, key: "", value: null };
+  async function probeLlm(config) {
+    const key = `${config.provider}|${config.ollama.host}`;
+    if (probeCache.value && probeCache.key === key && Date.now() - probeCache.at < 15_000) return probeCache.value;
+    let value;
+    if (config.provider === "openrouter") {
+      value = { connected: Boolean(config.openrouter.key), detail: config.openrouter.key ? "Key configured" : "OPENROUTER_KEY is not set" };
+    } else {
+      try {
+        const res = await fetch(`${config.ollama.host.replace(/\/+$/, "")}/api/tags`, { signal: AbortSignal.timeout(1500) });
+        value = res.ok ? { connected: true, detail: "Ollama answered" } : { connected: false, detail: `Ollama returned ${res.status}` };
+      } catch {
+        value = { connected: false, detail: `No answer from ${config.ollama.host}` };
+      }
+    }
+    value = { ...value, checkedAt: new Date().toISOString() };
+    probeCache = { at: Date.now(), key, value };
+    return value;
+  }
+
+  async function getLlmSettings(req, res) {
+    const config = llmConfig(db, account().id, secret);
+    return sendJson(res, 200, { ...publicLlmConfig(config), status: await probeLlm(config) });
+  }
 
   /** Explicit opt-in network call for API clients that want model discovery. */
   async function getLlmModels(req, res) {
@@ -562,25 +627,247 @@ export function createApp(options = {}) {
     }
   }
 
-  /** Search RAWG games using the account's stored RAWG key. Used by the frontend
-   *  game browser so users can pick titles to import without typing them manually. */
-  async function getRawgSearch(req, res) {
-    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    const q = String(url.searchParams.get("q") || "").trim();
-    const platform = String(url.searchParams.get("platform") || "");
-    if (!q) throw new HttpError(400, "Query parameter 'q' is required.");
+  /* ------------------------------------------------- catalog and library */
 
-    const key = auth.providerKey(db, account().id, "rawg");
-    if (!key) {
-      throw new HttpError(400, "No RAWG API key configured. Set RAWG_KEY in .env, then restart the server.");
-    }
-
+  /** Catalog errors carry a status (400 for a missing key); anything else is upstream. */
+  async function fromCatalog(fn, upstream = "RAWG") {
     try {
-      const games = await rawgSearch(q, { platform: platform || undefined, key });
-      return sendJson(res, 200, { games, count: games.length });
+      return await fn();
     } catch (err) {
-      throw new HttpError(502, `RAWG search failed: ${err.message}`);
+      if (err instanceof HttpError) throw err;
+      if (err.status) throw new HttpError(err.status, err.message);
+      throw new HttpError(502, `${upstream} request failed: ${err.message}`);
     }
+  }
+
+  /** rawgId → the account's newest cover for it, for status pills on library cards. */
+  function coversByRawg() {
+    const out = new Map();
+    for (const c of repo.listAccountCovers(db, account().id)) {
+      const rawgId = (parse(c.source) || {}).rawgId;
+      if (Number.isInteger(rawgId) && !out.has(rawgId)) out.set(rawgId, coverDto(c));
+    }
+    return out;
+  }
+
+  const coverRef = (c) =>
+    c ? { id: c.id, status: c.status, thumbUrl: c.thumbUrl, renderVersion: c.renderVersion, projectId: c.projectId } : null;
+
+  /** Search, or browse popular PS5/PS4 games when the query is empty. Paged for infinite scroll. */
+  async function getRawgSearch(req, res, ctx) {
+    const q = String(ctx.query.get("q") || "").trim().slice(0, 120);
+    const platform = ["PS5", "PS4"].includes(ctx.query.get("platform")) ? ctx.query.get("platform") : "";
+    const page = Math.max(1, Math.min(500, Number(ctx.query.get("page")) || 1));
+    const pageSize = Math.max(1, Math.min(40, Number(ctx.query.get("pageSize")) || 20));
+    const genre = /^[a-z0-9-]{1,40}$/.test(ctx.query.get("genre") || "") ? ctx.query.get("genre") : "";
+    const year = /^\d{4}$/.test(ctx.query.get("year") || "") ? ctx.query.get("year") : "";
+    const ordering = RAWG_ORDERING.has(ctx.query.get("ordering")) ? ctx.query.get("ordering") : "";
+
+    const result = await fromCatalog(() => catalog.search({ q, platform, page, pageSize, genre, year, ordering }));
+    const covers = coversByRawg();
+    const games = await Promise.all(
+      result.games.map(async (g) => ({ ...g, cover: coverRef(covers.get(g.id)), art: await catalog.summary(g.id) }))
+    );
+    return sendJson(res, 200, { games, count: games.length, page, next: result.next, total: result.total });
+  }
+
+  async function getGame(req, res, ctx) {
+    const g = await fromCatalog(() => catalog.game(ctx.params.id));
+    const m = g.meta;
+    const covers = repo
+      .listAccountCovers(db, account().id)
+      .filter((c) => (parse(c.source) || {}).rawgId === m.id)
+      .map((c) => coverDto(c));
+    return sendJson(res, 200, {
+      game: {
+        id: m.id,
+        slug: m.slug,
+        name: m.name,
+        released: m.released,
+        year: m.released ? Number(String(m.released).slice(0, 4)) : null,
+        developer: m.developer || m.publisher || "",
+        publisher: m.publisher || "",
+        genres: m.genres,
+        rating: m.rating,
+        metacritic: m.metacritic ?? null,
+        description: m.description.slice(0, 2000),
+        platforms: g.platforms || [],
+      },
+      copy: (await catalog.cachedCopy(m.id)) || { ...catalog.fallbackCopy(m), source: "rawg" },
+      covers,
+    });
+  }
+
+  async function getGameArt(req, res, ctx) {
+    const art = await fromCatalog(() => catalog.art(ctx.params.id));
+    return sendJson(res, 200, { ...art, panel: { widthPx: 1512, heightPx: 1748, widthMm: 128, heightMm: 148, dpi: 300 } });
+  }
+
+  /** Draft back-cover copy with the configured language model; RAWG fallback otherwise. Cached per game. */
+  async function draftGameCopy(req, res, ctx) {
+    const g = await fromCatalog(() => catalog.game(ctx.params.id));
+    const body = await readJson(req);
+    const cached = await catalog.cachedCopy(g.meta.id);
+    if (cached && !body.refresh) return sendJson(res, 200, cached);
+    const llm = llmConfig(db, account().id, secret);
+    let copy = null;
+    if (llmAvailable(llm)) copy = await llmCopy(g.meta, llmOpts(llm, "text")).catch(() => null);
+    const clean = copy ? cleanCopy(copy) : null;
+    if (clean) {
+      const value = { ...clean, source: llm.provider };
+      await catalog.saveCopy(g.meta.id, value);
+      return sendJson(res, 200, value);
+    }
+    return sendJson(res, 200, { ...catalog.fallbackCopy(g.meta), source: "rawg" });
+  }
+
+  /** The project new covers land in: the one asked for, or the account's first shelf (created if none). */
+  async function targetProject(projectId) {
+    if (projectId) return projectOr404(String(projectId));
+    const all = repo.listProjects(db, account().id);
+    if (all.length) return all[all.length - 1];
+    return repo.createProject(db, account().id, { name: "My library", platform: "PS5" });
+  }
+
+  const coverRoom = () => Math.max(0, auth.planOf(account()).coversPerMonth - auth.usageThisMonth(db, account().id));
+
+  /** Create (or re-run) a cover from a RAWG game with the art, layout and copy picked on the game screen. */
+  async function createGameCover(req, res, ctx) {
+    const body = await readJson(req);
+    const g = await fromCatalog(() => catalog.game(ctx.params.id));
+    const project = await targetProject(body.projectId);
+    const platform = body.platform === "PS4" ? "PS4" : "PS5";
+    const style = STYLES.has(body.style) ? body.style : "standard";
+
+    let front = null;
+    if (body.artId) {
+      const art = await fromCatalog(() => catalog.art(g.meta.id));
+      const item = art.items.find((i) => i.id === body.artId);
+      if (!item) throw new HttpError(400, "That art is not one of this game's candidates.");
+      front = { url: item.url, source: item.source, kind: item.kind, width: item.width, height: item.height, fit: item.fit, applied: false };
+    }
+    const copy = body.copy ? cleanCopy(body.copy) : await catalog.cachedCopy(g.meta.id);
+
+    const existing = repo.coverForRawg(db, account().id, project.id, g.meta.id);
+    let cover;
+    if (existing) {
+      // Same game, same shelf: re-run it with the new choices. Quota was charged at ingest.
+      cover = repo.getCover(db, account().id, existing.id);
+      repo.setCoverPlatform(db, cover.id, platform);
+    } else {
+      if (coverRoom() < 1) {
+        const plan = auth.planOf(account());
+        throw new HttpError(402, `The ${plan.label} plan includes ${plan.coversPerMonth} covers a month and they are used. Re-running existing covers is still free.`);
+      }
+      cover = repo.createCover(db, account().id, project.id, { title: g.meta.name, platform, mode: "auto" });
+      auth.recordUsage(db, account().id, "cover.created", cover.id);
+      repo.setCoverMeta(db, cover.id, { meta: { ...g.meta, query: g.meta.name } });
+    }
+    const source = repo.coverSource(cover);
+    repo.setCoverSource(db, cover.id, { ...source, rawgId: g.meta.id, ...(front ? { front } : {}) });
+    if (copy) repo.setCoverMeta(db, cover.id, { copy: { tagline: copy.tagline, blurb: copy.blurb, features: copy.features } });
+    repo.setCoverOverrides(db, cover.id, keptOverrides({ ...repo.coverOverrides(cover), style }));
+    const jobId = enqueueBuild(db, account().id, cover.id);
+
+    const fresh = repo.listAccountCovers(db, account().id, { projectId: project.id }).find((c) => c.id === cover.id);
+    return sendJson(res, existing ? 200 : 201, {
+      cover: coverDto(fresh),
+      created: !existing,
+      jobId,
+      runUrl: `/api/covers/${cover.id}/run`,
+      usage: usage(),
+    });
+  }
+
+  /** Library multi-select: one cover per game, each built with the best-fit art. */
+  async function batchCovers(req, res) {
+    const body = await readJson(req);
+    const games = Array.isArray(body.games) ? body.games.slice(0, 50) : [];
+    if (!games.length) throw new HttpError(400, "Pick at least one game.");
+    const project = await targetProject(body.projectId);
+    let room = coverRoom();
+    const created = [];
+    const rerun = [];
+    let skipped = 0;
+    for (const item of games) {
+      const rawgId = Number(item?.rawgId);
+      const name = String(item?.name || "").trim().slice(0, 160);
+      if (!Number.isInteger(rawgId) || rawgId <= 0 || !name) continue;
+      const platform = item.platform === "PS4" ? "PS4" : "PS5";
+      const existing = repo.coverForRawg(db, account().id, project.id, rawgId);
+      if (existing) {
+        enqueueBuild(db, account().id, existing.id);
+        rerun.push(existing.id);
+        continue;
+      }
+      if (room < 1) {
+        skipped++;
+        continue;
+      }
+      const cover = repo.createCover(db, account().id, project.id, { title: name, platform, mode: "auto" });
+      auth.recordUsage(db, account().id, "cover.created", cover.id);
+      repo.setCoverSource(db, cover.id, { rawgId });
+      enqueueBuild(db, account().id, cover.id);
+      room--;
+      created.push(cover.id);
+    }
+    const plan = auth.planOf(account());
+    return sendJson(res, 201, {
+      projectId: project.id,
+      created,
+      rerun,
+      skipped,
+      usage: usage(),
+      message:
+        `${created.length} cover${created.length === 1 ? "" : "s"} queued` +
+        (rerun.length ? `, ${rerun.length} re-run` : "") +
+        (skipped ? `, ${skipped} held back by the ${plan.coversPerMonth}-cover limit` : ""),
+    });
+  }
+
+  async function listCovers(req, res, ctx) {
+    const projectId = ctx.query.get("projectId") || null;
+    if (projectId) await projectOr404(projectId);
+    const covers = repo.listAccountCovers(db, account().id, { projectId }).map((c) => coverDto(c));
+    return sendJson(res, 200, { covers, pending: pendingJobs(db, account().id) });
+  }
+
+  async function getCoverRun(req, res, ctx) {
+    const cover = await coverOr404(ctx.params.id);
+    const row = repo.listAccountCovers(db, account().id, { projectId: cover.project_id }).find((c) => c.id === cover.id);
+    const render = repo.latestRender(db, cover.id);
+    return sendJson(res, 200, {
+      cover: coverDto(row),
+      run: jobRunDto(latestJobForCover(db, cover.id)),
+      steps: PIPELINE_STEPS,
+      qc: render ? parse(render.qc) : null,
+      render: render
+        ? { id: render.id, version: render.version, wrapUrl: `/api/renders/${render.id}/wrap.png`, frontUrl: `/api/renders/${render.id}/front.png` }
+        : null,
+      print: { trimMm: { width: 270, height: 148 }, bleedMm: bleed, dpi: 300 },
+    });
+  }
+
+  async function listRuns(req, res, ctx) {
+    const runs = repo.recentRuns(db, account().id, ctx.query.get("limit")).map((j) => {
+      const dto = jobRunDto(j);
+      return {
+        id: dto.id,
+        coverId: j.cover_id,
+        projectId: j.project_id,
+        title: j.title,
+        platform: j.platform,
+        coverStatus: j.cover_status,
+        state: dto.state,
+        step: dto.step,
+        totalSteps: dto.totalSteps,
+        currentLabel: dto.steps.find((s) => s.state === "running")?.label || null,
+        lastError: dto.lastError,
+        createdAt: dto.createdAt,
+        finishedAt: dto.finishedAt,
+      };
+    });
+    return sendJson(res, 200, { active: activeJobs(db, account().id).length, runs });
   }
 
   /* ------------------------------------------------------------ routing */
@@ -612,6 +899,14 @@ export function createApp(options = {}) {
     ["GET", /^\/api\/settings\/llm$/, getLlmSettings],
     ["GET", /^\/api\/settings\/models$/, getLlmModels],
     ["GET", /^\/api\/rawg\/search$/, getRawgSearch],
+    ["GET", /^\/api\/games\/([^/]+)$/, getGame],
+    ["GET", /^\/api\/games\/([^/]+)\/art$/, getGameArt],
+    ["POST", /^\/api\/games\/([^/]+)\/copy$/, draftGameCopy],
+    ["POST", /^\/api\/games\/([^/]+)\/covers$/, createGameCover],
+    ["GET", /^\/api\/covers$/, listCovers],
+    ["POST", /^\/api\/covers\/batch$/, batchCovers],
+    ["GET", /^\/api\/covers\/([^/]+)\/run$/, getCoverRun],
+    ["GET", /^\/api\/runs$/, listRuns],
   ];
 
   async function handle(req, res) {
@@ -675,10 +970,22 @@ export function createApp(options = {}) {
 /** Only the override keys the renderer reads ever reach the database. */
 function keptOverrides(raw) {
   const allowed = {};
-  for (const key of ["title", "titleSize", "titleAnchor", "titleAlign", "zoom", "offX", "offY", "ribbon", "subtitle"]) {
+  for (const key of ["title", "titleSize", "titleAnchor", "titleAlign", "zoom", "offX", "offY", "ribbon", "subtitle", "style"]) {
     if (raw && raw[key] !== undefined) allowed[key] = raw[key];
   }
   return allowed;
+}
+
+/** Back-cover copy from a client or a model: three known fields, bounded lengths. */
+function cleanCopy(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const str = (v, max) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+  const features = (Array.isArray(raw.features) ? raw.features : String(raw.features || "").split("\n"))
+    .map((f) => str(f, 60))
+    .filter(Boolean)
+    .slice(0, 4);
+  const copy = { tagline: str(raw.tagline, 80), blurb: str(raw.blurb, 1200), features };
+  return copy.blurb || copy.tagline || features.length ? copy : null;
 }
 
 /* ------------------------------------------------------------- direct run */

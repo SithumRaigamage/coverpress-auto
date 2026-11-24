@@ -41,7 +41,7 @@ test("local mode answers as one account, without a session", async () => {
   assert.equal(body.account.email, "local@coverpress.local");
   assert.equal(body.account.local, true);
   assert.equal(body.account.plan.name, "free");
-  assert.deepEqual(body.account.usage, { used: 0, limit: 10, projects: 0, projectLimit: 2 });
+  assert.deepEqual(body.account.usage, { used: 0, limit: 10, projects: 0, projectLimit: 2, rawg: { used: 0, limit: 20000 } });
   assert.equal(res.headers.get("set-cookie"), null);
 });
 
@@ -247,26 +247,29 @@ test("deleting a cover removes its files and its URLs", async () => {
   assert.equal((await get(server.url, wrapUrl)).status, 404);
 });
 
-test("provider keys are stored sealed and never returned", async () => {
+test("provider keys come from .env only and are never returned", async () => {
+  // The browser has no way to write a key: the old key-entry route is gone.
   const set = await put(server.url, "/api/settings/keys", { name: "rawg", value: "rawg-key-123456" });
-  assert.equal(set.status, 200);
-  assert.deepEqual(await set.json(), { keys: { rawg: true, openrouter: false } });
+  assert.equal(set.status, 404);
 
-  const sealed = db().prepare("SELECT sealed FROM provider_keys WHERE name = 'rawg'").get().sealed;
-  assert.doesNotMatch(sealed, /rawg-key-123456/);
-
-  const settings = await getJson(server.url, "/api/settings");
-  assert.equal(settings.body.keys.rawg, true);
-  assert.equal(JSON.stringify(settings.body).includes("rawg-key-123456"), false);
-
-  const cleared = await put(server.url, "/api/settings/keys", { name: "rawg", value: "" });
-  assert.deepEqual(await cleared.json(), { keys: { rawg: false, openrouter: false } });
+  const saved = process.env.RAWG_KEY;
+  process.env.RAWG_KEY = "rawg-key-123456";
+  try {
+    const settings = await getJson(server.url, "/api/settings");
+    assert.equal(settings.body.keys.rawg, true);
+    assert.equal(JSON.stringify(settings.body).includes("rawg-key-123456"), false);
+  } finally {
+    if (saved === undefined) delete process.env.RAWG_KEY;
+    else process.env.RAWG_KEY = saved;
+  }
+  assert.equal((await getJson(server.url, "/api/settings")).body.keys.rawg, false);
 });
 
-test("SteamGridDB remains refused for this service", async () => {
-  const res = await put(server.url, "/api/settings/keys", { name: "sgdb", value: "x" });
-  assert.equal(res.status, 400);
-  assert.match((await res.json()).error, /Unknown or unsupported/);
+test("SteamGridDB is off unless SGDB_KEY is set, and its restriction is stated", async () => {
+  const { body } = await getJson(server.url, "/api/settings");
+  assert.equal(body.keys.sgdb, false);
+  const rule = body.restrictions.find((r) => r.name === "sgdb");
+  assert.match(rule.reason, /personal, non-commercial/);
 });
 
 test("acceptable use is structured data the frontend can render", async () => {

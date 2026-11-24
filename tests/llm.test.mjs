@@ -61,30 +61,30 @@ const server = await boot();
 after(() => server.stop());
 const url = server.url;
 
-test("settings expose Ollama defaults without leaking a key", async () => {
-  await put(url, "/api/settings/keys", { name: "openrouter", value: "sk-should-never-appear" });
-  const { res, body } = await getJson(url, "/api/settings/llm");
-  assert.equal(res.status, 200);
-  assert.equal(body.provider, "ollama");
-  assert.match(body.ollama.host, /11434/);
-  assert.equal(body.openrouter.configured, true);
-  assert.equal(JSON.stringify(body).includes("sk-should-never-appear"), false);
+test("settings expose Ollama defaults and a real connection status without leaking a key", async () => {
+  const saved = process.env.OPENROUTER_KEY;
+  const savedHost = process.env.OLLAMA_HOST;
+  process.env.OPENROUTER_KEY = "sk-should-never-appear";
+  // Port 9 (discard) on loopback refuses connections: the probe must say so, quickly.
+  process.env.OLLAMA_HOST = "http://127.0.0.1:9";
+  try {
+    const { res, body } = await getJson(url, "/api/settings/llm");
+    assert.equal(res.status, 200);
+    assert.equal(body.provider, "ollama");
+    assert.match(body.ollama.host, /127\.0\.0\.1:9/);
+    assert.equal(body.openrouter.configured, true);
+    assert.equal(body.status.connected, false);
+    assert.match(body.status.detail, /No answer/);
+    assert.equal(JSON.stringify(body).includes("sk-should-never-appear"), false);
+  } finally {
+    if (saved === undefined) delete process.env.OPENROUTER_KEY;
+    else process.env.OPENROUTER_KEY = saved;
+    if (savedHost === undefined) delete process.env.OLLAMA_HOST;
+    else process.env.OLLAMA_HOST = savedHost;
+  }
 });
 
-test("LLM settings are validated, scoped and persisted", async () => {
-  const good = await put(url, "/api/settings/llm", {
-    provider: "ollama",
-    ollama: { host: "http://127.0.0.1:11434", textModel: "qwen2.5", visionModel: "llava" },
-  });
-  assert.equal(good.status, 200);
-  assert.equal((await good.json()).ollama.textModel, "qwen2.5");
-
-  const bad = await put(url, "/api/settings/llm", { provider: "sgdb" });
-  assert.equal(bad.status, 400);
-
-  const badHost = await put(url, "/api/settings/llm", { ollama: { host: "file:///etc/passwd" } });
-  assert.equal(badHost.status, 400);
-
-  const row = server.app.db.prepare("SELECT value FROM settings WHERE key = 'ollamaTextModel'").get();
-  assert.equal(row.value, "qwen2.5");
+test("LLM settings are read-only from the browser", async () => {
+  const res = await put(url, "/api/settings/llm", { provider: "openrouter" });
+  assert.equal(res.status, 404);
 });

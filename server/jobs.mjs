@@ -61,7 +61,8 @@ export function pendingJobs(db, accountId = null) {
 }
 
 function complete(db, job) {
-  db.prepare("UPDATE jobs SET state = 'done', last_error = '', updated_at = ? WHERE id = ?").run(nowIso(), job.id);
+  const now = nowIso();
+  db.prepare("UPDATE jobs SET state = 'done', last_error = '', finished_at = ?, updated_at = ? WHERE id = ?").run(now, now, job.id);
 }
 
 function fail(db, job, error) {
@@ -69,9 +70,11 @@ function fail(db, job, error) {
   const permanent = error?.permanent === true || job.attempts >= job.max_attempts;
 
   if (permanent) {
-    db.prepare("UPDATE jobs SET state = 'failed', last_error = ?, updated_at = ? WHERE id = ?").run(
+    const now = nowIso();
+    db.prepare("UPDATE jobs SET state = 'failed', last_error = ?, finished_at = ?, updated_at = ? WHERE id = ?").run(
       message,
-      nowIso(),
+      now,
+      now,
       job.id
     );
     return;
@@ -87,6 +90,21 @@ function fail(db, job, error) {
   );
   // A retry is in flight, so the cover should not look terminally failed.
   db.prepare("UPDATE covers SET status = 'queued', updated_at = ? WHERE id = ?").run(nowIso(), job.cover_id);
+}
+
+/** The newest job for a cover, whatever its state. Callers must already have
+ *  checked the cover belongs to the account — this is keyed by cover id. */
+export function latestJobForCover(db, coverId) {
+  return (
+    db.prepare("SELECT * FROM jobs WHERE cover_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(coverId) || null
+  );
+}
+
+/** Jobs queued or running for an account, oldest first — the "Pipeline runs" count. */
+export function activeJobs(db, accountId) {
+  return db
+    .prepare("SELECT * FROM jobs WHERE account_id = ? AND state IN ('queued','running') ORDER BY created_at, rowid")
+    .all(accountId);
 }
 
 /** Mark a job as permanently failed (used when the cover was deleted mid-flight). */

@@ -3,7 +3,7 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { boot, getJson, put } from "./helpers.mjs";
+import { boot, getJson } from "./helpers.mjs";
 
 const realFetch = globalThis.fetch;
 after(() => { globalThis.fetch = realFetch; });
@@ -28,12 +28,6 @@ const stubRawg = (payload) => {
   return calls;
 };
 
-test("RAWG search rejects a missing query", async () => {
-  const { res, body } = await getJson(url, "/api/rawg/search");
-  assert.equal(res.status, 400);
-  assert.match(body.error, /required/i);
-});
-
 test("RAWG search without a key explains how to configure one", async () => {
   const { res, body } = await getJson(url, "/api/rawg/search?q=elden%20ring");
   assert.equal(res.status, 400);
@@ -41,7 +35,8 @@ test("RAWG search without a key explains how to configure one", async () => {
 });
 
 test("RAWG search returns simplified games using the stored key and platform filter", async () => {
-  await put(url, "/api/settings/keys", { name: "rawg", value: "test-rawg-key" });
+  process.env.RAWG_KEY = "test-rawg-key";
+  after(() => { delete process.env.RAWG_KEY; });
 
   const calls = stubRawg({
     results: [

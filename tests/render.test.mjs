@@ -85,3 +85,24 @@ test("overrides are clamped and cannot touch print geometry", () => {
   assert.equal(cfg.panelW, 128);
   assert.equal(cfg.zoom, 1.2);
 });
+
+test("style is a whitelisted override: minimal drops the decoration, junk is ignored", () => {
+  const meta = { name: "Style Test", genres: ["Action"], released: "2020-01-01", description: "A game." };
+  const minimal = coverCfg({ meta, theme: { edition: "Deluxe" }, overrides: { style: "minimal", ribbon: "Bonus" } });
+  assert.equal(minimal.style, "minimal");
+  assert.equal(minimal.subtitle, "");
+  assert.equal(minimal.ribbon, "");
+  assert.equal(minimal.tagline, "");
+  assert.equal(minimal.features, "");
+  assert.ok(minimal.blurb, "the blurb stays");
+  assert.equal(coverCfg({ meta, overrides: { style: "neon" } }).style, "standard");
+});
+
+test("art fit ranks a print-size portrait over a 16:9 screenshot", async () => {
+  const { artFit } = await import("../lib/qc.mjs");
+  assert.equal(artFit(1512, 1748).score, 100);
+  assert.equal(artFit(1512, 1748).printReady, true);
+  assert.ok(artFit(1024, 1536).score > artFit(1920, 1080).score);
+  assert.equal(artFit(1920, 1080).printReady, false, "landscape is a heavy crop, as runChecks warns");
+  assert.equal(artFit(0, 0).score, 0);
+});

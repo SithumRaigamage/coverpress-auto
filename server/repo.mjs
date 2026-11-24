@@ -334,3 +334,74 @@ export function projectSummary(db, accountId, projectId) {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return { counts, total };
 }
+
+/* ------------------------------------------------- library and runs */
+
+/** Where a cover came from and which art was picked. JSON in covers.source. */
+export const coverSource = (cover) => j(cover.source, {});
+
+export function setCoverSource(db, coverId, source) {
+  db.prepare("UPDATE covers SET source = ?, updated_at = ? WHERE id = ?").run(
+    JSON.stringify(source || {}),
+    nowIso(),
+    coverId
+  );
+}
+
+/** Every cover the account owns, optionally one project, newest first. */
+export function listAccountCovers(db, accountId, { projectId = null } = {}) {
+  return db
+    .prepare(
+      `SELECT c.*, p.account_id, p.name AS project_name,
+              r.id AS render_id, r.version AS render_version,
+              (SELECT path FROM art WHERE cover_id = c.id AND slot = 'front') AS art_path
+       FROM covers c
+       JOIN projects p ON p.id = c.project_id
+       LEFT JOIN renders r ON r.id = (
+         SELECT id FROM renders WHERE cover_id = c.id ORDER BY version DESC LIMIT 1
+       )
+       WHERE p.account_id = ? AND (? IS NULL OR p.id = ?)
+       ORDER BY c.updated_at DESC, c.rowid DESC`
+    )
+    .all(accountId, projectId, projectId);
+}
+
+/** A cover in this project already made from this RAWG game, if any. */
+export function coverForRawg(db, accountId, projectId, rawgId) {
+  return (
+    db
+      .prepare(
+        `SELECT c.id FROM covers c JOIN projects p ON p.id = c.project_id
+         WHERE p.account_id = ? AND p.id = ? AND json_valid(c.source) AND json_extract(c.source, '$.rawgId') = ?
+         ORDER BY c.created_at LIMIT 1`
+      )
+      .get(accountId, projectId, Number(rawgId)) || null
+  );
+}
+
+/** Recent jobs with their cover, scoped through projects.account_id. */
+export function recentRuns(db, accountId, limit = 30) {
+  return db
+    .prepare(
+      `SELECT j.*, c.title, c.platform, c.status AS cover_status, c.project_id
+       FROM jobs j
+       JOIN covers c ON c.id = j.cover_id
+       JOIN projects p ON p.id = c.project_id
+       WHERE p.account_id = ?
+       ORDER BY j.created_at DESC, j.rowid DESC
+       LIMIT ?`
+    )
+    .all(accountId, Math.max(1, Math.min(100, Number(limit) || 30)));
+}
+
+export function deleteArt(db, coverId, slot) {
+  db.prepare("DELETE FROM art WHERE cover_id = ? AND slot = ?").run(coverId, slot);
+}
+
+export function setCoverPlatform(db, coverId, platform) {
+  db.prepare("UPDATE covers SET platform = ?, updated_at = ? WHERE id = ?").run(
+    platform === "PS4" ? "PS4" : "PS5",
+    nowIso(),
+    coverId
+  );
+}
