@@ -1,0 +1,130 @@
+{
+  "info": {
+    "_postman_id": "8f5b6c2e-2a4d-4c31-9d7a-c0v3r3ss001",
+    "name": "Coverpress — RAWG + SteamGridDB",
+    "description": "Upstream API checks for the two data providers Coverpress has used. RAWG is the only provider the app calls server-side. SteamGridDB is personal/non-commercial use only and is used by the offline CLI — do not wire it into a hosted app. See docs/LEGAL-AND-VIABILITY.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": { "type": "noauth" },
+  "variable": [
+    { "key": "rawgBase", "value": "https://api.rawg.io/api" },
+    { "key": "rawgKey", "value": "REPLACE_WITH_RAWG_KEY" },
+    { "key": "sgdbBase", "value": "https://www.steamgriddb.com/api/v2" },
+    { "key": "sgdbKey", "value": "REPLACE_WITH_SGDB_KEY" },
+    { "key": "gameName", "value": "Elden Ring" },
+    { "key": "rawgGameId", "value": "315201" },
+    { "key": "sgdbGameId", "value": "REPLACE_FROM_AUTOCOMPLETE" }
+  ],
+  "item": [
+    {
+      "name": "RAWG",
+      "description": "Metadata source. Key as a query parameter. Attribution is printed on every back panel.",
+      "item": [
+        {
+          "name": "Search games",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('results array', () => pm.response.to.have.jsonBody('results'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{rawgBase}}/games?key={{rawgKey}}&search={{gameName}}&search_precise=true&page_size=5&platforms=187",
+              "host": ["{{rawgBase}}"],
+              "path": ["games"],
+              "query": [
+                { "key": "key", "value": "{{rawgKey}}" },
+                { "key": "search", "value": "{{gameName}}" },
+                { "key": "search_precise", "value": "true" },
+                { "key": "page_size", "value": "5" },
+                { "key": "platforms", "value": "187", "description": "18 = PS4, 187 = PS5" }
+              ]
+            },
+            "description": "Mirror of rawgLookup() in lib/sources.mjs. Copy an `id` into rawgGameId."
+          }
+        },
+        {
+          "name": "Game details",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has a name', () => pm.response.to.have.jsonBody('name'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{rawgBase}}/games/{{rawgGameId}}?key={{rawgKey}}",
+              "host": ["{{rawgBase}}"],
+              "path": ["games", "{{rawgGameId}}"],
+              "query": [{ "key": "key", "value": "{{rawgKey}}" }]
+            },
+            "description": "Supplies description, publisher, genres, ESRB rating and the 16:9 hero used as a back-panel background."
+          }
+        },
+        {
+          "name": "Screenshots",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has results', () => pm.response.to.have.jsonBody('results'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{rawgBase}}/games/{{rawgGameId}}/screenshots?key={{rawgKey}}",
+              "host": ["{{rawgBase}}"],
+              "path": ["games", "{{rawgGameId}}", "screenshots"],
+              "query": [{ "key": "key", "value": "{{rawgKey}}" }]
+            },
+            "description": "Three images fill the right-hand column on the back panel."
+          }
+        },
+        {
+          "name": "Platforms",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{rawgBase}}/platforms?key={{rawgKey}}&page_size=40", "host": ["{{rawgBase}}"], "path": ["platforms"], "query": [{ "key": "key", "value": "{{rawgKey}}" }, { "key": "page_size", "value": "40" }] },
+            "description": "Useful when a platform id changes; the app pins PS4=18 and PS5=187."
+          }
+        }
+      ]
+    },
+    {
+      "name": "SteamGridDB (local CLI only)",
+      "description": "Personal, non-commercial use only. Never call from the hosted app. Grids often contain retail logo lockups — inspect before printing.",
+      "item": [
+        {
+          "name": "Autocomplete",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has data', () => pm.response.to.have.jsonBody('data'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{sgdbKey}}" }, { "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{sgdbBase}}/search/autocomplete/{{gameName}}", "host": ["{{sgdbBase}}"], "path": ["search", "autocomplete", "{{gameName}}"] },
+            "description": "Mirror of sgdbCover(): copy data[0].id into sgdbGameId."
+          }
+        },
+        {
+          "name": "Grids for game",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has data', () => pm.response.to.have.jsonBody('data'));"] } }],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{sgdbKey}}" }],
+            "url": {
+              "raw": "{{sgdbBase}}/grids/game/{{sgdbGameId}}?dimensions=600x900,660x930&types=static&limit=5",
+              "host": ["{{sgdbBase}}"],
+              "path": ["grids", "game", "{{sgdbGameId}}"],
+              "query": [
+                { "key": "dimensions", "value": "600x900,660x930" },
+                { "key": "types", "value": "static" },
+                { "key": "limit", "value": "5" }
+              ]
+            },
+            "description": "Portrait grids are the right shape for the 0.87:1 panel; still check the artwork before use."
+          }
+        },
+        {
+          "name": "Grid by Steam app id",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{sgdbKey}}" }],
+            "url": { "raw": "{{sgdbBase}}/grids/game/1245620?dimensions=600x900&types=static", "host": ["{{sgdbBase}}"], "path": ["grids", "game", "1245620"], "query": [{ "key": "dimensions", "value": "600x900" }, { "key": "types", "value": "static" }] },
+            "description": "Example: Elden Ring's Steam app id. Useful when autocomplete is ambiguous."
+          }
+        }
+      ]
+    }
+  ]
+}

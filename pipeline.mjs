@@ -10,7 +10,7 @@
   node pipeline.mjs build --platform PS4|PS5   override platform for every game
   node pipeline.mjs prompts          write art prompts to art/<slug>/PROMPTS.md
   node pipeline.mjs print            build a print sheet of everything approved
-  node pipeline.mjs models           list OpenRouter :free models and which take images
+  node pipeline.mjs models           list installed Ollama models (or OpenRouter :free models)
   node pipeline.mjs build --force    ignore the cache
 */
 
@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { loadImage } from "@napi-rs/canvas";
 import { renderPanel, renderRawPanel, DEFAULT_CFG, DPMM, CASE } from "./lib/render.mjs";
 import { composeCover } from "./lib/cover.mjs";
-import { rawgLookup, sgdbCover, llmCopy, llmReview, llmArtPrompt, listFreeModels, fetchBuffer } from "./lib/sources.mjs";
+import { rawgLookup, sgdbCover, llmCopy, llmReview, llmArtPrompt, listModels, fetchBuffer } from "./lib/sources.mjs";
 import { runChecks, mergeVision } from "./lib/qc.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -37,10 +37,12 @@ const LAYOUT = (process.env.COVER_LAYOUT || "auto").toLowerCase();
 const ENV = {
   rawg: process.env.RAWG_KEY,
   sgdb: process.env.SGDB_KEY,
+  provider: (process.env.LLM_PROVIDER || "ollama").toLowerCase(),
   key: process.env.OPENROUTER_KEY,
-  textModel: process.env.OPENROUTER_TEXT_MODEL || "openrouter/free",
-  visionModel: process.env.OPENROUTER_VISION_MODEL || "openrouter/free",
-  // OpenRouter free tier: 20 req/min
+  host: process.env.OLLAMA_HOST || "http://127.0.0.1:11434",
+  textModel: process.env.OLLAMA_TEXT_MODEL || process.env.OPENROUTER_TEXT_MODEL || "llama3.2",
+  visionModel: process.env.OLLAMA_VISION_MODEL || process.env.OPENROUTER_VISION_MODEL || "llava",
+  // OpenRouter free tier: 20 req/min. Ollama has no such quota.
   gap: 3200,
   vision: process.env.VISION_REVIEW !== "false",
   bleed: Number(process.env.BLEED_MM ?? 3),
@@ -48,9 +50,14 @@ const ENV = {
 };
 
 const llmOpts = (which) => ({
+  provider: ENV.provider,
+  host: ENV.host,
   key: ENV.key,
   model: which === "vision" ? ENV.visionModel : ENV.textModel,
 });
+
+// Ollama needs no key; an unreachable local server degrades to deterministic copy.
+const llmReady = () => ENV.provider === "ollama" || Boolean(ENV.key);
 
 /**
  * Hand-made art in art/<slug>/ wins over anything fetched.
@@ -224,7 +231,7 @@ async function buildOne(line, force) {
         artPrompts = JSON.parse(existing);
       }
     } catch {}
-    if (!artPrompts && ENV.key) {
+    if (!artPrompts && llmReady()) {
       artPrompts = await llmArtPrompt(meta, llmOpts("text")).catch(() => null);
       if (artPrompts) {
         await fs.writeFile(promptsJsonPath, JSON.stringify(artPrompts, null, 2));
@@ -331,7 +338,7 @@ async function buildOne(line, force) {
 
   let qc = out.qc;
 
-  if (ENV.vision && ENV.key && qc.fails === 0) {
+  if (ENV.vision && llmReady() && qc.fails === 0) {
     const vision = await llmReview(out.frontPng, meta.name, llmOpts("vision")).catch(() => null);
     qc = mergeVision(qc, vision, ENV.autoThreshold);
     await sleep(ENV.gap);
@@ -504,8 +511,8 @@ async function prompts(onlyMissing) {
     return !i.customArt;
   });
 
-  if (!ENV.key) {
-    log("No OPENROUTER_KEY — cannot generate prompts. Set the key in .env and retry.");
+  if (!llmReady()) {
+    log("No language model configured. Set LLM_PROVIDER=openrouter and OPENROUTER_KEY, or use the default local Ollama.");
     return;
   }
 
@@ -560,13 +567,20 @@ async function prompts(onlyMissing) {
 /* -------------------------------------------------------------- models */
 
 async function models() {
-  const list = await listFreeModels(process.env.OPENROUTER_KEY);
+  const list = await listModels({ provider: ENV.provider, host: ENV.host, key: ENV.key });
   const vision = list.filter((m) => m.vision);
-  log(`\n${vision.length} free model(s) that accept images — use one for OPENROUTER_VISION_MODEL:`);
-  vision.slice(0, 12).forEach((m) => log(`  ${m.id.padEnd(52)} ${m.name}`));
-  log(`\nText-only free models — use one for OPENROUTER_TEXT_MODEL:`);
+  const visionLabel = ENV.provider === "ollama" ? "OLLAMA_VISION_MODEL" : "OPENROUTER_VISION_MODEL";
+  const textLabel = ENV.provider === "ollama" ? "OLLAMA_TEXT_MODEL" : "OPENROUTER_TEXT_MODEL";
+  log(`\n${list.length} ${ENV.provider} model(s) · ${vision.length} look vision-capable`);
+  log(`Vision candidates — use one for ${visionLabel}:`);
+  (vision.length ? vision : list).slice(0, 12).forEach((m) => log(`  ${m.id.padEnd(52)} ${m.name}`));
+  log(`\nText models — use one for ${textLabel}:`);
   list.filter((m) => !m.vision).slice(0, 12).forEach((m) => log(`  ${m.id.padEnd(52)} ${m.name}`));
-  log(`\nThe free list rotates, so re-run this if a model starts 404ing.`);
+  if (ENV.provider === "ollama") {
+    log(`\nOllama vision support is inferred from model names. Check the model card if in doubt.`);
+  } else {
+    log(`\nThe free list rotates, so re-run this if a model starts 404ing.`);
+  }
 }
 
 /* ---------------------------------------------------------------- main */

@@ -13,6 +13,7 @@ import { composeCover } from "../lib/cover.mjs";
 import { rawgLookup, llmCopy, fetchBuffer } from "../lib/sources.mjs";
 import * as repo from "./repo.mjs";
 import { providerKey } from "./auth.mjs";
+import { llmConfig, llmAvailable, llmOpts } from "./llm.mjs";
 import { safeJoin } from "./http.mjs";
 
 const permanent = (message) => Object.assign(new Error(message), { permanent: true });
@@ -47,14 +48,22 @@ async function fetchRemoteArt({ db, cover, meta, dataDir, secret, accountId }) {
 
   const uploaded = new Set(repo.listArt(db, cover.id).map((r) => r.slot));
 
-  // Portrait front art is always the customer's. SteamGridDB's terms limit access
+  // Portrait front art is normally the customer's: SteamGridDB's terms limit access
   // to personal, non-commercial use (the CLI still uses it, this service does not),
-  // and its grids often carry retail logo lockups. RAWG's hero image is 16:9 and a
-  // 0.87:1 panel crop destroys it, so it is never used as front art either.
+  // and RAWG's hero image is 16:9 so a 0.87:1 panel crop destroys it.
+  // In fully-automatic import we fall back to RAWG's hero image as front art so the
+  // pipeline never stalls on a missing upload; review then flags the heavy crop.
   if (!uploaded.has("front")) {
-    throw permanent(
-      "Portrait front art is required. Upload a 3:4 image for this cover — at least 1512 × 1748 px."
-    );
+    if (meta.heroUrl) {
+      await saveFetched(db, dataDir, cover.id, "front", "front-fetched.jpg", meta.heroUrl, accountId).catch(
+        () => {}
+      );
+    }
+    if (!repo.artFor(db, cover.id, "front")) {
+      throw permanent(
+        "No front art could be fetched. Upload a 3:4 portrait image (at least 1512 × 1748 px), or check your RAWG key."
+      );
+    }
   }
 
   if (!uploaded.has("back") && meta.heroUrl) {
@@ -104,11 +113,11 @@ async function buildOnce({ db, dataDir, secret, accountId, coverId, cover, logge
     await fetchRemoteArt({ db, cover, meta, dataDir, secret, accountId });
 
     if (!copy) {
-      const llmKey = providerKey(db, accountId, "openrouter", secret);
-      if (llmKey) {
-        copy = await llmCopy(meta, { key: llmKey, model: process.env.OPENROUTER_TEXT_MODEL || "openrouter/free" }).catch(
-          () => null
-        );
+      // Ollama is local and needs no key, so "configured" means "selected".
+      // A dead local server is not fatal: deterministic fallbacks fill the slots.
+      const llm = llmConfig(db, accountId, secret);
+      if (llmAvailable(llm)) {
+        copy = await llmCopy(meta, llmOpts(llm, "text")).catch(() => null);
         if (copy) repo.setCoverMeta(db, coverId, { copy });
       }
     }

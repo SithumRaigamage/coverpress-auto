@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS provider_keys (
   PRIMARY KEY (account_id, name)
 );
 
+-- Non-secret preferences (Ollama host, model names). Scoped like every other
+-- account-owned table so the isolation rule survives multi-user support.
+CREATE TABLE IF NOT EXISTS settings (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  key        TEXT NOT NULL,
+  value      TEXT NOT NULL,
+  PRIMARY KEY (account_id, key)
+);
+
 CREATE TABLE IF NOT EXISTS projects (
   id         TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

@@ -1,0 +1,54 @@
+/* Design tokens. Tailwind v4 turns these into utilities; app.css uses the
+   same variables for the handful of bespoke print/workshop components. */
+
+@theme {
+  --color-paper: #F6F4EF;
+  --color-card: #FFFFFF;
+  --color-ink: #14161A;
+  --color-ink-2: #3D444E;
+  --color-ink-3: #6C7480;
+  --color-line: #E2DED4;
+  --color-accent: #14607A;
+  --color-accent-soft: #E7F0F3;
+  --color-ok: #2F6B4F;
+  --color-warn: #A65A18;
+  --color-danger: #9B2C2C;
+  --color-mat: #101318;
+
+  --font-display: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue', sans-serif;
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-sharp: 2px;
+  --radius-panel: 8px;
+}
+
+:root {
+  color-scheme: light;
+
+  --paper: #F6F4EF;
+  --card: #FFFFFF;
+  --ink: #14161A;
+  --ink-2: #3D444E;
+  --ink-3: #6C7480;
+  --line: #E2DED4;
+  --line-soft: #EEEAE0;
+  --accent: #14607A;
+  --accent-soft: #E7F0F3;
+  --ok: #2F6B4F;
+  --ok-soft: #E9F2ED;
+  --warn: #A65A18;
+  --warn-soft: #FAF0E2;
+  --danger: #9B2C2C;
+  --danger-soft: #F9E9E9;
+  --mat: #101318;
+
+  --font-display: 'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue', sans-serif;
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --motion-fast: 120ms ease-out;
+  --motion-panel: 180ms ease-out;
+
+  --sidebar-width: 220px;
+}

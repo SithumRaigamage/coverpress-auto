@@ -71,6 +71,26 @@ export function updateProjectTheme(db, accountId, projectId, theme = {}) {
   return getProject(db, accountId, projectId);
 }
 
+/* -------------------------------------------------------------- settings */
+
+/** Non-secret preferences, scoped to the account. Never store secrets here. */
+export function getSettings(db, accountId) {
+  const rows = db.prepare("SELECT key, value FROM settings WHERE account_id = ?").all(accountId);
+  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+}
+
+/** `patch` is expected to be whitelisted by server/llm.mjs before it gets here. */
+export function setSettings(db, accountId, patch = {}) {
+  const entries = Object.entries(patch).filter(([key]) => /^[a-zA-Z][a-zA-Z0-9]{0,49}$/.test(key));
+  if (!entries.length) return getSettings(db, accountId);
+  const write = db.prepare(
+    `INSERT INTO settings (account_id, key, value) VALUES (?, ?, ?)
+     ON CONFLICT (account_id, key) DO UPDATE SET value = excluded.value`
+  );
+  for (const [key, value] of entries) write.run(accountId, key, String(value).slice(0, 200));
+  return getSettings(db, accountId);
+}
+
 /* ---------------------------------------------------------------- covers */
 
 export function createCover(db, accountId, projectId, { title, platform, mode = "manual" }) {

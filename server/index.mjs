@@ -25,6 +25,8 @@ import * as repo from "./repo.mjs";
 import * as auth from "./auth.mjs";
 import { buildCover } from "./build.mjs";
 import { createWorker, enqueueBuild, pendingJobs } from "./jobs.mjs";
+import { llmConfig, llmOpts, normalizeLlmPatch, publicLlmConfig } from "./llm.mjs";
+import { listModels } from "../lib/sources.mjs";
 import { LEGAL } from "./legal.mjs";
 import {
   HttpError,
@@ -226,6 +228,9 @@ export function createApp(options = {}) {
         "GET /api/renders/:id/:file",
         "GET /api/settings",
         "PUT /api/settings/keys",
+        "GET /api/settings/llm",
+        "PUT /api/settings/llm",
+        "GET /api/settings/models",
       ],
     });
   }
@@ -522,7 +527,42 @@ export function createApp(options = {}) {
       // Optional providers this deployment refuses to hold a key for, and why.
       unsupported: [{ name: "sgdb", reason: "SteamGridDB terms allow personal, non-commercial use only." }],
       storage: { dataDir: path.basename(dataDir), database: "sqlite" },
+      llm: publicLlmConfig(llmConfig(db, account().id, secret)),
     });
+  }
+
+  const getLlmSettings = async (req, res) =>
+    sendJson(res, 200, publicLlmConfig(llmConfig(db, account().id, secret)));
+
+  async function putLlmSettings(req, res) {
+    const body = await readJson(req);
+    const current = llmConfig(db, account().id, secret);
+    let patch;
+    try {
+      patch = normalizeLlmPatch(body, {
+        provider: current.provider,
+        ollamaHost: current.ollama.host,
+        ollamaTextModel: current.ollama.textModel,
+        ollamaVisionModel: current.ollama.visionModel,
+        openrouterTextModel: current.openrouter.textModel,
+        openrouterVisionModel: current.openrouter.visionModel,
+      });
+    } catch (err) {
+      throw new HttpError(err.status || 400, err.message);
+    }
+    repo.setSettings(db, account().id, patch);
+    return sendJson(res, 200, publicLlmConfig(llmConfig(db, account().id, secret)));
+  }
+
+  /** Explicit opt-in network call: used by Settings → Check connection. */
+  async function getLlmModels(req, res) {
+    const config = llmConfig(db, account().id, secret);
+    try {
+      const models = await listModels(llmOpts(config, "text"));
+      return sendJson(res, 200, { provider: config.provider, models });
+    } catch (err) {
+      throw new HttpError(502, `Could not reach the ${config.provider} model list: ${err.message}`);
+    }
   }
 
   async function putKey(req, res) {
@@ -562,6 +602,9 @@ export function createApp(options = {}) {
     ["GET", /^\/api\/renders\/([^/]+)\/([^/]+)$/, getRender],
     ["GET", /^\/api\/settings$/, getSettings],
     ["PUT", /^\/api\/settings\/keys$/, putKey],
+    ["GET", /^\/api\/settings\/llm$/, getLlmSettings],
+    ["PUT", /^\/api\/settings\/llm$/, putLlmSettings],
+    ["GET", /^\/api\/settings\/models$/, getLlmModels],
   ];
 
   async function handle(req, res) {

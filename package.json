@@ -6,7 +6,11 @@
   "engines": { "node": ">=22.5" },
   "scripts": {
     "start": "node server/index.mjs",
-    "dev": "node --env-file=.env server/index.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "node --env-file=.env server/index.mjs",
+    "dev:web": "npm --prefix frontend run dev",
+    "api": "node server/index.mjs",
+    "serve": "node scripts/serve.mjs",
     "test": "node --test tests",
     "smoke": "node smoke.mjs",
     "build": "node --env-file=.env pipeline.mjs build",

@@ -72,3 +72,15 @@ test("the project summary counts what the shelf screen needs", async () => {
   assert.equal(body.stats.total, 1);
   assert.ok(body.stats.counts.auto_approved !== undefined || body.stats.counts.needs_review !== undefined);
 });
+
+test("an auto cover without a RAWG key fails with guidance, not a ReferenceError", async () => {
+  const autoProject = await createProject(server.url, "Auto shelf");
+  await importTitles(server.url, autoProject, "Automatic Game | PS5 | auto");
+  await server.app.worker.drain();
+  const row = server.app.db
+    .prepare("SELECT status, error FROM covers WHERE project_id = ?")
+    .get(autoProject);
+  assert.equal(row.status, "failed");
+  assert.match(row.error, /RAWG API key/);
+  assert.doesNotMatch(row.error, /not defined/);
+});

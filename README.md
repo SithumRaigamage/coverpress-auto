@@ -5,23 +5,36 @@ titles, bring artwork, and get 300 DPI wraps with the band, spine, back-cover co
 spec chips, legal text and barcode already laid out — with the uncertain ones held back
 for review instead of printed.
 
-**Current state:** the API is finished and tested; the browser app is being rebuilt from
-scratch. There is no HTML in this repository right now — `server/index.mjs` speaks JSON
-only, and there is no sign-up or sign-in while it runs in single-account local mode.
-The frontend specification is `docs/FRONTEND-PLAN.md`.
-
 ```
+Web  ─── frontend/               React app on :5173, proxies /api to :3000
 API  ─── server/index.mjs        JSON, local mode, no sessions
 CLI  ─── pipeline.mjs            same renderer, no browser, no network needed
 ```
 
-## API
+## Run it
+
+No terminal commands are needed after the first install: on macOS double-click
+`Start Coverpress.command`. It starts the API, waits for `/api/health`, starts the
+web app and opens your browser at `http://127.0.0.1:5173`.
+
+From a terminal the equivalent is:
 
 ```bash
-npm install
+npm install                 # once
 cp .env.example .env        # optional
-npm run dev                 # http://127.0.0.1:3000
+npm run dev                 # API :3000 + web :5173, browser opens
 ```
+
+For API-only work: `npm run dev:api` (:3000) or `npm run dev:web` (:5173, expects the
+API already running). The frontend spec is `docs/FRONTEND-PLAN.md`.
+
+To serve the built app as one origin, build it (`npm --prefix frontend run build`),
+start the API with `APP_ORIGIN` pointing at the web host, then run `npm run serve`
+(:8080 by default). The API itself still serves JSON only.
+
+## API
+
+The JSON API remains directly usable without the browser:
 
 ```bash
 curl -s localhost:3000/api/me
@@ -51,7 +64,12 @@ not a migration.
   be stored. `npm run plan studio` changes the local account's plan live.
 - **Provider keys** — RAWG / OpenRouter keys are sealed with AES-256-GCM and used only
   server-side; no route returns a value. SteamGridDB is deliberately not connected:
-  its terms are personal, non-commercial use only.
+  its terms are personal, non-commercial use only. `postman/` has a collection for
+  testing RAWG and SteamGridDB directly; keep SGDB in the CLI.
+- **Language model** — Ollama is the default (`http://127.0.0.1:11434`, local, no key).
+  It supplies back-cover copy, art prompts and vision review. OpenRouter `:free`
+  models remain selectable under Settings. No provider generates images and every
+  template slot has a deterministic fallback, so a cover still renders without one.
 - **Legal** — `GET /api/legal` returns the acceptable-use text as data. Read
   `docs/LEGAL-AND-VIABILITY.md` before charging money.
 - **Approval** — a cover is printable when it is `approved` (by hand) or
@@ -69,11 +87,12 @@ npm test        # node:test, real API on an ephemeral port, temp data dir
 npm run smoke   # offline render check: 3260 x 1819 px wrap, no keys, no network
 ```
 
-47 tests cover: the JSON-only surface (no page routes exist), single-account local mode,
+53 tests cover: the JSON-only surface (no page routes exist), single-account local mode,
 project/cover CRUD, import and quota limits, upload validation by magic bytes, the build
 queue → QC → render versioning, override whitelisting, decisions, print plan in
-millimetres, sealed keys, cross-origin refusal and path traversal. Not covered by the
-suite: provider calls (RAWG/OpenRouter) and the vision review — they need live keys.
+millimetres, sealed keys, cross-origin refusal, path traversal, the Ollama HTTP boundary
+and the LLM settings routes. Live RAWG/SteamGridDB calls and real model inference are
+not exercised — import the Postman collection or run the app against your own keys.
 
 ## CLI
 
@@ -85,7 +104,7 @@ npm run build      # fetch, compose, auto-check games.txt
 npm run rebuild    # same, ignoring the cache
 npm run print      # A4 print sheet of approved covers
 npm run prompts    # write art prompts to art/<slug>/PROMPTS.md
-npm run models     # list OpenRouter free models
+npm run models     # list installed Ollama models (or OpenRouter :free models)
 ```
 
 ## How a cover is built
