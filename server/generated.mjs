@@ -151,5 +151,28 @@ export function createGenerator({ dataDir, key, model = () => GEMINI_DEFAULT_MOD
     }
   }
 
-  return { enabled, model, prompt, savePrompt, list, generate, localFile, fileFor, pipelineStep };
+  /** Delete one AI image (a draft the user doesn't want). False if it wasn't there. */
+  async function remove(rawgId, file) {
+    const target = fileFor(rawgId, file);
+    if (!target) return false;
+    const idx = await index(rawgId);
+    const before = idx.items.length;
+    idx.items = idx.items.filter((i) => i.file !== file);
+    await fs.rm(target, { force: true });
+    if (idx.items.length === before) return false;
+    await fs.writeFile(path.join(dir(rawgId), "index.json"), JSON.stringify(idx));
+    return true;
+  }
+
+  /** Delete every AI image for a game. The saved prompt stays. Returns how many went. */
+  async function clear(rawgId) {
+    const d = dir(rawgId);
+    if (!d || !/^\d+$/.test(String(rawgId))) return 0;
+    const idx = await index(rawgId);
+    for (const item of idx.items) if (FILE_RE.test(item.file)) await fs.rm(path.join(d, item.file), { force: true });
+    if (idx.items.length) await fs.writeFile(path.join(d, "index.json"), JSON.stringify({ items: [] }));
+    return idx.items.length;
+  }
+
+  return { enabled, model, prompt, savePrompt, list, generate, localFile, fileFor, pipelineStep, remove, clear };
 }

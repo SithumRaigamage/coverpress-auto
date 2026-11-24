@@ -136,10 +136,23 @@ every cover still completes.
 | GET | `/api/covers/:id/run` | Steps, log lines, render URLs and QC for the run screen |
 | PUT | `/api/settings/pipeline` | `{ aiArt: boolean }`: the optional AI-art step |
 | GET | `/api/runs` | Recent runs and the active count |
+| DELETE | `/api/covers/:id` | A cover with every version, its art and its runs (409 while it is building) |
+| POST | `/api/covers/delete` | `{ ids }`: several covers, e.g. a review column; building covers come back in `skipped` |
+| DELETE | `/api/covers/:id/versions/:renderId` | One version. Never the last; deleting the approved one sends the cover back to review |
+| DELETE | `/api/runs/:id` | One run from the history; a queued run is cancelled, a running one is refused |
+| DELETE | `/api/runs` | Clear finished and failed runs; active runs stay |
+| DELETE | `/api/projects/:id` | A shelf and every cover on it |
+| DELETE | `/api/generated/:rawgId/:file` | One AI draft image |
+| DELETE | `/api/games/:rawgId/ai-art` | Every AI image for a game (the saved prompt stays) |
+| POST | `/api/reset` | `{ confirm: "DELETE", aiArt? }`: every shelf, cover, version and run; AI art too when `aiArt` is true |
 
 RAWG detail, measured art sizes and SteamGridDB results are cached under
 `data/art/cache/`, and generated images under `data/art/generated/`, so opening a game
 or rebuilding a cover twice costs no API calls.
+
+Every delete in the UI asks for confirmation first. Deleting a shelf with covers, and
+Settings → Danger zone, also need `DELETE` typed. Settings, the RAWG cache and the
+usage meters are never deleted.
 
 On start-up the API merges any duplicate covers of the same game and platform into one
 cover. Their renders become versions, and approvals are kept.

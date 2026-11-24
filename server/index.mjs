@@ -29,6 +29,7 @@ import { llmConfig, llmOpts, publicLlmConfig } from "./llm.mjs";
 import { listModels, llmCopy, RAWG_ORDERING } from "../lib/sources.mjs";
 import { createCatalog } from "./catalog.mjs";
 import { mergeDuplicateCovers } from "./dedupe.mjs";
+import * as purge from "./purge.mjs";
 import { createGenerator, MAX_PER_PRESS } from "./generated.mjs";
 import { GeminiError, GEMINI_DEFAULT_MODEL } from "../lib/gemini.mjs";
 import { PIPELINE_STEPS, jobRunDto, progressReporter } from "./progress.mjs";
@@ -302,6 +303,14 @@ export function createApp(options = {}) {
         "POST /api/covers/:id/retry",
         "GET /api/covers/:id/versions",
         "DELETE /api/covers/:id",
+        "POST /api/covers/delete",
+        "DELETE /api/covers/:id/versions/:renderId",
+        "DELETE /api/projects/:id",
+        "DELETE /api/runs",
+        "DELETE /api/runs/:id",
+        "DELETE /api/generated/:rawgId/:file",
+        "DELETE /api/games/:rawgId/ai-art",
+        "POST /api/reset",
         "PUT /api/covers/:id/art/:slot",
         "GET /api/covers/:id/art/:slot",
         "GET /api/renders/:id/:file",
@@ -570,22 +579,67 @@ export function createApp(options = {}) {
     return sendJson(res, 202, { coverId: cover.id, jobId, mode: "variant", pending: true });
   }
 
-  async function deleteCover(req, res, ctx) {
-    const cover = await coverOr404(ctx.params.id);
-    const projectId = cover.project_id;
-    const files = [
-      ...db.prepare("SELECT wrap_path, front_path FROM renders WHERE cover_id = ?").all(cover.id),
-      ...repo.listArt(db, cover.id),
-    ];
-    db.prepare("DELETE FROM covers WHERE id = ?").run(cover.id);
-    for (const row of files) {
-      for (const rel of [row.wrap_path, row.front_path, row.path]) {
-        if (!rel) continue;
-        const file = safeJoin(dataDir, rel);
-        if (file) await fs.unlink(file).catch(() => {});
-      }
+  /* ------------------------------------------------------------ deleting */
+
+  const purged = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof purge.PurgeError) throw new HttpError(err.status, err.message);
+      throw err;
     }
-    return sendJson(res, 200, { deleted: cover.id, projectId });
+  };
+
+  /** One cover, every version, its art and its runs. 409 while it is building. */
+  async function deleteCover(req, res, ctx) {
+    return sendJson(res, 200, await purged(() => purge.deleteCover(db, dataDir, account().id, ctx.params.id)));
+  }
+
+  /** Several covers, e.g. "Clear" on a review column. Building covers are skipped. */
+  async function bulkDeleteCovers(req, res) {
+    const body = await readJson(req);
+    return sendJson(res, 200, await purged(() => purge.deleteCovers(db, dataDir, account().id, body.ids)));
+  }
+
+  /** One version of a cover. Never the last one; the approved one sends the cover back to review. */
+  async function deleteCoverVersion(req, res, ctx) {
+    return sendJson(res, 200, await purged(() => purge.deleteVersion(db, dataDir, account().id, ctx.params.id, ctx.params.slot)));
+  }
+
+  /** One run from the history; a queued run is cancelled. */
+  async function deleteRunRoute(req, res, ctx) {
+    return sendJson(res, 200, await purged(async () => purge.deleteRun(db, account().id, ctx.params.id)));
+  }
+
+  /** Clear finished runs from the history. Active runs stay. */
+  async function clearRunsRoute(req, res) {
+    return sendJson(res, 200, purge.clearRuns(db, account().id));
+  }
+
+  /** A shelf and every cover on it. */
+  async function deleteProjectRoute(req, res, ctx) {
+    return sendJson(res, 200, await purged(() => purge.deleteProject(db, dataDir, account().id, ctx.params.id)));
+  }
+
+  /** One AI-generated image (a draft). */
+  async function deleteGenerated(req, res, ctx) {
+    const ok = await generator.remove(ctx.params.id, ctx.params.file);
+    if (!ok) throw new HttpError(404, "Unknown generated image.");
+    return sendJson(res, 200, { deleted: ctx.params.file });
+  }
+
+  /** Every AI-generated image for a game. The saved prompt stays. */
+  async function clearGenerated(req, res, ctx) {
+    if (!/^\d+$/.test(String(ctx.params.id))) throw new HttpError(400, "Bad game id.");
+    return sendJson(res, 200, { deleted: await generator.clear(ctx.params.id) });
+  }
+
+  /** Settings → Danger zone. Needs { confirm: "DELETE" }; aiArt: true also removes AI images. */
+  async function deleteEverything(req, res) {
+    const body = await readJson(req);
+    if (body.confirm !== "DELETE") throw new HttpError(400, 'Type DELETE to confirm.');
+    const out = await purged(() => purge.deleteEverything(db, dataDir, account().id, { aiArt: body.aiArt === true }));
+    return sendJson(res, 200, out);
   }
 
   async function uploadArt(req, res, ctx) {
@@ -1025,6 +1079,14 @@ export function createApp(options = {}) {
     ["POST", /^\/api\/covers\/([^/]+)\/retry$/, retryCover],
     ["GET", /^\/api\/covers\/([^/]+)\/versions$/, listCoverVersions],
     ["DELETE", /^\/api\/covers\/([^/]+)$/, deleteCover],
+    ["POST", /^\/api\/covers\/delete$/, bulkDeleteCovers],
+    ["DELETE", /^\/api\/covers\/([^/]+)\/versions\/([^/]+)$/, deleteCoverVersion],
+    ["DELETE", /^\/api\/projects\/([^/]+)$/, deleteProjectRoute],
+    ["DELETE", /^\/api\/runs$/, clearRunsRoute],
+    ["DELETE", /^\/api\/runs\/([^/]+)$/, deleteRunRoute],
+    ["DELETE", /^\/api\/generated\/([^/]+)\/([^/]+)$/, deleteGenerated],
+    ["DELETE", /^\/api\/games\/([^/]+)\/ai-art$/, clearGenerated],
+    ["POST", /^\/api\/reset$/, deleteEverything],
     ["PUT", /^\/api\/covers\/([^/]+)\/art\/([^/]+)$/, uploadArt],
     ["GET", /^\/api\/covers\/([^/]+)\/art\/([^/]+)$/, getArt],
     ["GET", /^\/api\/renders\/([^/]+)\/([^/]+)$/, getRender],
