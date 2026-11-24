@@ -1,130 +1,1658 @@
 {
   "info": {
-    "_postman_id": "8f5b6c2e-2a4d-4c31-9d7a-c0v3r3ss001",
-    "name": "Coverpress — RAWG + SteamGridDB",
-    "description": "Upstream API checks for the two data providers Coverpress has used. RAWG is the only provider the app calls server-side. SteamGridDB is personal/non-commercial use only and is used by the offline CLI — do not wire it into a hosted app. See docs/LEGAL-AND-VIABILITY.md.",
+    "_postman_id": "8f5b6c2e-2a4d-4c31-9d7a-c0v3r3ss002",
+    "name": "Coverpress — RAWG, SteamGridDB and the local API",
+    "description": "The exact upstream calls Coverpress makes to RAWG and SteamGridDB, and its own local API, including reruns. Set rawgKey and sgdbKey (the same values as RAWG_KEY and SGDB_KEY in .env). The requests save the ids they return, so run them in order. SteamGridDB is personal, non-commercial use only.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "auth": { "type": "noauth" },
-  "variable": [
-    { "key": "rawgBase", "value": "https://api.rawg.io/api" },
-    { "key": "rawgKey", "value": "REPLACE_WITH_RAWG_KEY" },
-    { "key": "sgdbBase", "value": "https://www.steamgriddb.com/api/v2" },
-    { "key": "sgdbKey", "value": "REPLACE_WITH_SGDB_KEY" },
-    { "key": "gameName", "value": "Elden Ring" },
-    { "key": "rawgGameId", "value": "315201" },
-    { "key": "sgdbGameId", "value": "REPLACE_FROM_AUTOCOMPLETE" }
-  ],
+  "auth": {
+    "type": "noauth"
+  },
   "item": [
     {
-      "name": "RAWG",
-      "description": "Metadata source. Key as a query parameter. Attribution is printed on every back panel.",
+      "name": "RAWG (rawg.io/apidocs)",
+      "description": "The exact RAWG calls Coverpress makes (lib/sources.mjs). Free tier: 20,000 requests a month; the key goes in the query string. Coverpress caches every game under data/art/cache/, so a rerun costs no RAWG calls.",
       "item": [
         {
-          "name": "Search games",
-          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('results array', () => pm.response.to.have.jsonBody('results'));"] } }],
+          "name": "Library: popular PS5 + PS4",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{rawgBase}}/games?key={{rawgKey}}&search={{gameName}}&search_precise=true&page_size=5&platforms=187",
-              "host": ["{{rawgBase}}"],
-              "path": ["games"],
+              "raw": "{{rawgBase}}/games?key={{rawgKey}}&page=1&page_size=20&platforms=187,18&ordering=-added",
+              "host": [
+                "{{rawgBase}}"
+              ],
+              "path": [
+                "games"
+              ],
               "query": [
-                { "key": "key", "value": "{{rawgKey}}" },
-                { "key": "search", "value": "{{gameName}}" },
-                { "key": "search_precise", "value": "true" },
-                { "key": "page_size", "value": "5" },
-                { "key": "platforms", "value": "187", "description": "18 = PS4, 187 = PS5" }
+                {
+                  "key": "key",
+                  "value": "{{rawgKey}}"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20"
+                },
+                {
+                  "key": "platforms",
+                  "value": "187,18"
+                },
+                {
+                  "key": "ordering",
+                  "value": "-added"
+                }
               ]
             },
-            "description": "Mirror of rawgLookup() in lib/sources.mjs. Copy an `id` into rawgGameId."
-          }
+            "description": "What the library shows with an empty search. 187 = PS5, 18 = PS4."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('has results', () => pm.expect(pm.response.json().results).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Library: search",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{rawgBase}}/games?key={{rawgKey}}&page=1&page_size=20&search={{gameName}}&platforms=187,18",
+              "host": [
+                "{{rawgBase}}"
+              ],
+              "path": [
+                "games"
+              ],
+              "query": [
+                {
+                  "key": "key",
+                  "value": "{{rawgKey}}"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20"
+                },
+                {
+                  "key": "search",
+                  "value": "{{gameName}}"
+                },
+                {
+                  "key": "platforms",
+                  "value": "187,18"
+                }
+              ]
+            },
+            "description": "Search as the library does it. Saves the first hit's id into rawgGameId."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "const r = pm.response.json().results || [];",
+                  "if (r[0]) pm.collectionVariables.set('rawgGameId', r[0].id);",
+                  "pm.test('found the game', () => pm.expect(r.length).to.be.above(0));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Game details",
-          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has a name', () => pm.response.to.have.jsonBody('name'));"] } }],
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{rawgBase}}/games/{{rawgGameId}}?key={{rawgKey}}",
-              "host": ["{{rawgBase}}"],
-              "path": ["games", "{{rawgGameId}}"],
-              "query": [{ "key": "key", "value": "{{rawgKey}}" }]
+              "host": [
+                "{{rawgBase}}"
+              ],
+              "path": [
+                "games",
+                "{{rawgGameId}}"
+              ],
+              "query": [
+                {
+                  "key": "key",
+                  "value": "{{rawgKey}}"
+                }
+              ]
             },
-            "description": "Supplies description, publisher, genres, ESRB rating and the 16:9 hero used as a back-panel background."
-          }
+            "description": "Metadata, description (back-cover copy fallback), background_image and background_image_additional (front-art candidates)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Screenshots",
-          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has results', () => pm.response.to.have.jsonBody('results'));"] } }],
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{rawgBase}}/games/{{rawgGameId}}/screenshots?key={{rawgKey}}",
-              "host": ["{{rawgBase}}"],
-              "path": ["games", "{{rawgGameId}}", "screenshots"],
-              "query": [{ "key": "key", "value": "{{rawgKey}}" }]
+              "raw": "{{rawgBase}}/games/{{rawgGameId}}/screenshots?key={{rawgKey}}&page_size=20",
+              "host": [
+                "{{rawgBase}}"
+              ],
+              "path": [
+                "games",
+                "{{rawgGameId}}",
+                "screenshots"
+              ],
+              "query": [
+                {
+                  "key": "key",
+                  "value": "{{rawgKey}}"
+                },
+                {
+                  "key": "page_size",
+                  "value": "20"
+                }
+              ]
             },
-            "description": "Three images fill the right-hand column on the back panel."
-          }
-        },
-        {
-          "name": "Platforms",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": { "raw": "{{rawgBase}}/platforms?key={{rawgKey}}&page_size=40", "host": ["{{rawgBase}}"], "path": ["platforms"], "query": [{ "key": "key", "value": "{{rawgKey}}" }, { "key": "page_size", "value": "40" }] },
-            "description": "Useful when a platform id changes; the app pins PS4=18 and PS5=187."
-          }
+            "description": "Every screenshot: front-art candidates and the three back-panel shots. Reruns rotate which ones are used."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      "name": "SteamGridDB (local CLI only)",
-      "description": "Personal, non-commercial use only. Never call from the hosted app. Grids often contain retail logo lockups — inspect before printing.",
+      "name": "SteamGridDB (steamgriddb.com/profile/preferences/api)",
+      "description": "The exact SteamGridDB calls Coverpress makes (lib/sources.mjs), with the Bearer key from SGDB_KEY. Personal, non-commercial use only. Logo lockups (white_logo) are excluded because the renderer prints its own title; some art may still carry a logo, so check before printing.",
       "item": [
         {
-          "name": "Autocomplete",
-          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has data', () => pm.response.to.have.jsonBody('data'));"] } }],
+          "name": "Autocomplete (find the game)",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{sgdbKey}}" }, { "key": "Accept", "value": "application/json" }],
-            "url": { "raw": "{{sgdbBase}}/search/autocomplete/{{gameName}}", "host": ["{{sgdbBase}}"], "path": ["search", "autocomplete", "{{gameName}}"] },
-            "description": "Mirror of sgdbCover(): copy data[0].id into sgdbGameId."
-          }
-        },
-        {
-          "name": "Grids for game",
-          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('has data', () => pm.response.to.have.jsonBody('data'));"] } }],
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{sgdbKey}}" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{sgdbBase}}/grids/game/{{sgdbGameId}}?dimensions=600x900,660x930&types=static&limit=5",
-              "host": ["{{sgdbBase}}"],
-              "path": ["grids", "game", "{{sgdbGameId}}"],
-              "query": [
-                { "key": "dimensions", "value": "600x900,660x930" },
-                { "key": "types", "value": "static" },
-                { "key": "limit", "value": "5" }
+              "raw": "{{sgdbBase}}/search/autocomplete/{{gameName}}",
+              "host": [
+                "{{sgdbBase}}"
+              ],
+              "path": [
+                "search",
+                "autocomplete",
+                "{{gameName}}"
               ]
             },
-            "description": "Portrait grids are the right shape for the 0.87:1 panel; still check the artwork before use."
-          }
+            "description": "Coverpress takes the exact-name match, else the first result. Saves it into sgdbGameId."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "const d = pm.response.json().data || [];",
+                  "if (d[0]) pm.collectionVariables.set('sgdbGameId', d[0].id);",
+                  "pm.test('found the game', () => pm.expect(d.length).to.be.above(0));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "Grid by Steam app id",
+          "name": "Portrait grids, first page",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Authorization", "value": "Bearer {{sgdbKey}}" }],
-            "url": { "raw": "{{sgdbBase}}/grids/game/1245620?dimensions=600x900&types=static", "host": ["{{sgdbBase}}"], "path": ["grids", "game", "1245620"], "query": [{ "key": "dimensions", "value": "600x900" }, { "key": "types", "value": "static" }] },
-            "description": "Example: Elden Ring's Steam app id. Useful when autocomplete is ambiguous."
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{sgdbBase}}/grids/game/{{sgdbGameId}}?dimensions=600x900,660x930,342x482&styles=alternate,blurred,no_logo,material&types=static&nsfw=false&humor=false&limit=12&page=0",
+              "host": [
+                "{{sgdbBase}}"
+              ],
+              "path": [
+                "grids",
+                "game",
+                "{{sgdbGameId}}"
+              ],
+              "query": [
+                {
+                  "key": "dimensions",
+                  "value": "600x900,660x930,342x482"
+                },
+                {
+                  "key": "styles",
+                  "value": "alternate,blurred,no_logo,material"
+                },
+                {
+                  "key": "types",
+                  "value": "static"
+                },
+                {
+                  "key": "nsfw",
+                  "value": "false"
+                },
+                {
+                  "key": "humor",
+                  "value": "false"
+                },
+                {
+                  "key": "limit",
+                  "value": "12"
+                },
+                {
+                  "key": "page",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "The grids a new cover chooses from."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('grids returned', () => pm.expect(pm.response.json().data).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Portrait grids, next page (what a rerun fetches)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{sgdbBase}}/grids/game/{{sgdbGameId}}?dimensions=600x900,660x930,342x482&styles=alternate,blurred,no_logo,material&types=static&nsfw=false&humor=false&limit=12&page={{sgdbPage}}",
+              "host": [
+                "{{sgdbBase}}"
+              ],
+              "path": [
+                "grids",
+                "game",
+                "{{sgdbGameId}}"
+              ],
+              "query": [
+                {
+                  "key": "dimensions",
+                  "value": "600x900,660x930,342x482"
+                },
+                {
+                  "key": "styles",
+                  "value": "alternate,blurred,no_logo,material"
+                },
+                {
+                  "key": "types",
+                  "value": "static"
+                },
+                {
+                  "key": "nsfw",
+                  "value": "false"
+                },
+                {
+                  "key": "humor",
+                  "value": "false"
+                },
+                {
+                  "key": "limit",
+                  "value": "12"
+                },
+                {
+                  "key": "page",
+                  "value": "{{sgdbPage}}"
+                }
+              ]
+            },
+            "description": "When every grid a cover knows has been used, Run again asks for the next page and adds it to the cache. Change sgdbPage (1, 2, …) to walk the pages. A short page means the list has run out."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "const d = pm.response.json().data || [];",
+                  "pm.test('page size ≤ 12', () => pm.expect(d.length).to.be.at.most(12));",
+                  "if (d.length === 12) pm.collectionVariables.set('sgdbPage', String(Number(pm.collectionVariables.get('sgdbPage') || 1) + 1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hero banners",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{sgdbBase}}/heroes/game/{{sgdbGameId}}?types=static&nsfw=false&humor=false&limit=6",
+              "host": [
+                "{{sgdbBase}}"
+              ],
+              "path": [
+                "heroes",
+                "game",
+                "{{sgdbGameId}}"
+              ],
+              "query": [
+                {
+                  "key": "types",
+                  "value": "static"
+                },
+                {
+                  "key": "nsfw",
+                  "value": "false"
+                },
+                {
+                  "key": "humor",
+                  "value": "false"
+                },
+                {
+                  "key": "limit",
+                  "value": "6"
+                }
+              ]
+            },
+            "description": "Wide banners: candidates for the front (heavy crop) and the spine."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{sgdbKey}}",
+            "type": "string"
           }
+        ]
+      }
+    },
+    {
+      "name": "Coverpress local API (npm run dev)",
+      "description": "The app's own API on 127.0.0.1:3000. Run the requests top to bottom: each one saves the ids the next needs (rawgGameId, artId, coverId, renderId). Requests without an Origin header are allowed, so Postman works as is.",
+      "item": [
+        {
+          "name": "1 · Library and games",
+          "description": "",
+          "item": [
+            {
+              "name": "Search the library",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/rawg/search?q={{gameName}}&platform=PS5&page=1",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "rawg",
+                    "search"
+                  ],
+                  "query": [
+                    {
+                      "key": "q",
+                      "value": "{{gameName}}"
+                    },
+                    {
+                      "key": "platform",
+                      "value": "PS5"
+                    },
+                    {
+                      "key": "page",
+                      "value": "1"
+                    }
+                  ]
+                },
+                "description": "Coverpress's own search (cached 10 minutes). Saves the first game's id."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                      "const g = (pm.response.json().games || [])[0];",
+                      "if (g) pm.collectionVariables.set('rawgGameId', g.id);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Game detail",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/games/{{rawgGameId}}",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "games",
+                    "{{rawgGameId}}"
+                  ]
+                },
+                "description": "Metadata, copy and existing covers for a game."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Art candidates (RAWG + SteamGridDB + AI)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/games/{{rawgGameId}}/art",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "games",
+                    "{{rawgGameId}}",
+                    "art"
+                  ]
+                },
+                "description": "Every candidate with width, height, kind and fit (0–100), best first. Saves the best id into artId."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                      "const a = pm.response.json();",
+                      "if (a.best) pm.collectionVariables.set('artId', a.best);",
+                      "pm.test('counts present', () => pm.expect(a.counts).to.have.property('sgdb'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Draft back-cover copy",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/games/{{rawgGameId}}/copy",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "games",
+                    "{{rawgGameId}}",
+                    "copy"
+                  ]
+                },
+                "description": "Ollama drafts it (cached); falls back to RAWG's description.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"refresh\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "AI art prompt",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/games/{{rawgGameId}}/ai-prompt",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "games",
+                    "{{rawgGameId}}",
+                    "ai-prompt"
+                  ]
+                },
+                "description": "Your saved prompt, or llama3.2's draft."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Generate AI art (Gemini, billed)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/games/{{rawgGameId}}/ai-art",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "games",
+                    "{{rawgGameId}}",
+                    "ai-art"
+                  ]
+                },
+                "description": "Needs GEMINI_API_KEY. Billed per image by Google.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"prompt\": \"\",\n  \"count\": 1\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "2 · Covers and reruns",
+          "description": "",
+          "item": [
+            {
+              "name": "Generate cover (Run all steps)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/games/{{rawgGameId}}/covers",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "games",
+                    "{{rawgGameId}}",
+                    "covers"
+                  ]
+                },
+                "description": "Creates the cover (or re-runs the existing one for this game + platform) and queues every pipeline step. Saves coverId.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"platform\": \"PS5\",\n  \"style\": \"standard\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                      "const c = pm.response.json().cover;",
+                      "if (c) pm.collectionVariables.set('coverId', c.id);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Batch generate",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/batch",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "batch"
+                  ]
+                },
+                "description": "One cover per game + platform; existing ones get a new variant.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"games\": [\n    {\n      \"rawgId\": 3498,\n      \"name\": \"Grand Theft Auto V\",\n      \"platform\": \"PS5\"\n    }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Watch the run",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/run",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "run"
+                  ]
+                },
+                "description": "Steps, log lines, render URLs and QC. Poll every second while it runs."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Rerun: new variant (new art)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/build",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "build"
+                  ]
+                },
+                "description": "Run again. Picks unused art from a different source than last time (RAWG ↔ SteamGridDB ↔ AI), fetches SteamGridDB's next page when every grid is used, rotates the screenshots, redrafts the copy and varies the layout.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"mode\": \"variant\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Rerun: same art",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/build",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "build"
+                  ]
+                },
+                "description": "Re-render the stored art and copy, e.g. after adjusting.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"mode\": \"same\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Retry all steps (failed / unreviewed)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/retry",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "retry"
+                  ]
+                },
+                "description": "The review board's Run again for covers that are not approved.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Versions",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/versions",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "versions"
+                  ]
+                },
+                "description": "Every version, newest first, with the art each used. Saves the newest renderId."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                      "const v = (pm.response.json().versions || [])[0];",
+                      "if (v) pm.collectionVariables.set('renderId', v.id);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Adjust and re-render",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/render",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "render"
+                  ]
+                },
+                "description": "Zoom, offsets (mm) and title size (mm). Same art, new version.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"overrides\": {\n    \"zoom\": 1.1,\n    \"offX\": 0,\n    \"offY\": -4,\n    \"titleSize\": 15\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Approve a version",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/decision",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "decision"
+                  ]
+                },
+                "description": "Approve the version in renderId; that one prints.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"decision\": \"approved\",\n  \"renderId\": \"{{renderId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Cover list (review board)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers"
+                  ]
+                },
+                "description": "Every cover across shelves, each with its versions."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Runs",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/runs",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "runs"
+                  ]
+                },
+                "description": "Recent runs and the active count."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "3 · Deleting",
+          "description": "Destructive. Every request here deletes data.",
+          "item": [
+            {
+              "name": "Delete one version",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}/versions/{{renderId}}",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}",
+                    "versions",
+                    "{{renderId}}"
+                  ]
+                },
+                "description": "Never the last version. Deleting the approved one sends the cover back to review."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Delete a cover",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/{{coverId}}",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "{{coverId}}"
+                  ]
+                },
+                "description": "Every version, its art and its runs. 409 while it is building."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Delete several covers",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/covers/delete",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "covers",
+                    "delete"
+                  ]
+                },
+                "description": "Building covers come back in skipped.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": [\n    \"{{coverId}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Clear finished runs",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/runs",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "runs"
+                  ]
+                },
+                "description": "Done and failed runs only."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Clear AI drafts for a game",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/games/{{rawgGameId}}/ai-art",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "games",
+                    "{{rawgGameId}}",
+                    "ai-art"
+                  ]
+                },
+                "description": "The saved prompt stays."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Delete everything",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/reset",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "reset"
+                  ]
+                },
+                "description": "Every shelf, cover, version and run. Add \"aiArt\": true to delete AI images too.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"confirm\": \"DELETE\",\n  \"aiArt\": false\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "4 · Status",
+          "description": "",
+          "item": [
+            {
+              "name": "Health",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/health",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "health"
+                  ]
+                },
+                "description": "Is the API up?"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Settings (keys set / not set)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/settings",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "settings"
+                  ]
+                },
+                "description": "Shows whether RAWG_KEY, SGDB_KEY and GEMINI_API_KEY are set. Keys are never returned."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Ollama status",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/settings/llm",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "settings",
+                    "llm"
+                  ]
+                },
+                "description": "Host, models and whether Ollama answers."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Shelves",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{coverpress}}/api/projects",
+                  "host": [
+                    "{{coverpress}}"
+                  ],
+                  "path": [
+                    "api",
+                    "projects"
+                  ]
+                },
+                "description": "Every shelf with counts."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
         }
       ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "rawgBase",
+      "value": "https://api.rawg.io/api"
+    },
+    {
+      "key": "rawgKey",
+      "value": "REPLACE_WITH_RAWG_KEY"
+    },
+    {
+      "key": "sgdbBase",
+      "value": "https://www.steamgriddb.com/api/v2"
+    },
+    {
+      "key": "sgdbKey",
+      "value": "REPLACE_WITH_SGDB_KEY"
+    },
+    {
+      "key": "coverpress",
+      "value": "http://127.0.0.1:3000"
+    },
+    {
+      "key": "gameName",
+      "value": "Grand Theft Auto V"
+    },
+    {
+      "key": "rawgGameId",
+      "value": "3498"
+    },
+    {
+      "key": "sgdbGameId",
+      "value": ""
+    },
+    {
+      "key": "sgdbPage",
+      "value": "1"
+    },
+    {
+      "key": "artId",
+      "value": ""
+    },
+    {
+      "key": "coverId",
+      "value": ""
+    },
+    {
+      "key": "renderId",
+      "value": ""
     }
   ]
 }
