@@ -124,6 +124,25 @@ export function useDecision(projectId: string) {
   });
 }
 
+export function useRetryCover(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (coverId: string) => api.retryCover(coverId),
+    onSuccess: (_result, coverId) => {
+      void client.invalidateQueries({ queryKey: qk.cover(coverId) });
+      void client.invalidateQueries({ queryKey: qk.status(projectId) });
+      void client.invalidateQueries({ queryKey: qk.project(projectId) });
+      void client.invalidateQueries({ queryKey: qk.projects });
+    },
+  });
+}
+
+export function useRawgSearch() {
+  return useMutation({
+    mutationFn: ({ q, platform }: { q: string; platform?: string }) => api.rawgSearch(q, platform),
+  });
+}
+
 export function useDeleteCover(projectId: string) {
   const client = useQueryClient();
   return useMutation({

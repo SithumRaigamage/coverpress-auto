@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Check, CircleHelp, Download, Printer, RotateCcw, X } from 'lucide-react';
 import { errorMessage } from '../../api/client';
-import { useDecision, usePatchOverrides, useRenderCover } from '../../api/mutations';
+import { useDecision, usePatchOverrides, useRenderCover, useRetryCover } from '../../api/mutations';
 import { qk, useCoverDetail, useInvalidateOnIdle, useProject } from '../../api/queries';
 import { Button, Chip, EmptyState, ErrorPanel, Skeleton, StatusChip } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -49,6 +49,7 @@ export function Review() {
   const decide = useDecision(id);
   const patchOverrides = usePatchOverrides(active?.id ?? '', id);
   const rerender = useRenderCover(id);
+  const retry = useRetryCover(id);
 
   useEffect(() => {
     if (active && active.id !== selectedId) setSearchParams({ cover: active.id }, { replace: true });
@@ -115,6 +116,15 @@ export function Review() {
         onError: (error) => toast('Re-render failed', { description: errorMessage(error), tone: 'error' }),
       },
     );
+  }
+
+  function applyRetry() {
+    if (!cover) return;
+    remember();
+    retry.mutate(cover.id, {
+      onSuccess: () => setAnnouncement('Running all steps again — metadata, art, and render will be re-fetched.'),
+      onError: (error) => toast('Retry failed', { description: errorMessage(error), tone: 'error' }),
+    });
   }
 
   function applySave(values: OverrideValues) {
@@ -326,6 +336,16 @@ export function Review() {
                     </a>
                   ) : (
                     <Button disabled icon={<Download size={15} />}>Download wrap</Button>
+                  )}
+                  {(cover.status === 'needs_review' || cover.status === 'failed' || cover.status === 'rejected') && (
+                    <Button
+                      variant="ghost"
+                      icon={<RotateCcw size={15} />}
+                      disabled={retry.isPending}
+                      onClick={applyRetry}
+                    >
+                      Run all steps again
+                    </Button>
                   )}
                   <Button
                     variant="ghost"

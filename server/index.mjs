@@ -25,8 +25,8 @@ import * as repo from "./repo.mjs";
 import * as auth from "./auth.mjs";
 import { buildCover } from "./build.mjs";
 import { createWorker, enqueueBuild, pendingJobs } from "./jobs.mjs";
-import { llmConfig, llmOpts, normalizeLlmPatch, publicLlmConfig } from "./llm.mjs";
-import { listModels } from "../lib/sources.mjs";
+import { llmConfig, llmOpts, publicLlmConfig } from "./llm.mjs";
+import { listModels, rawgSearch } from "../lib/sources.mjs";
 import { LEGAL } from "./legal.mjs";
 import {
   HttpError,
@@ -222,15 +222,15 @@ export function createApp(options = {}) {
         "POST /api/covers/:id/build",
         "POST /api/covers/:id/render",
         "POST /api/covers/:id/decision",
+        "POST /api/covers/:id/retry",
         "DELETE /api/covers/:id",
         "PUT /api/covers/:id/art/:slot",
         "GET /api/covers/:id/art/:slot",
         "GET /api/renders/:id/:file",
         "GET /api/settings",
-        "PUT /api/settings/keys",
         "GET /api/settings/llm",
-        "PUT /api/settings/llm",
         "GET /api/settings/models",
+        "GET /api/rawg/search",
       ],
     });
   }
@@ -430,6 +430,23 @@ export function createApp(options = {}) {
     return sendJson(res, 200, { id: updated.id, status: updated.status, decidedAt: updated.decided_at });
   }
 
+  /** Re-run the whole pipeline for a cover that is still unreviewed or failed:
+   *  re-fetch metadata/art, re-render, bump the version, and return to review. */
+  async function retryCover(req, res, ctx) {
+    const cover = await coverOr404(ctx.params.id);
+    if (!["needs_review", "failed", "rejected"].includes(cover.status)) {
+      throw new HttpError(400, "Only unreviewed, failed, or rejected covers can be rebuilt.");
+    }
+    // Send it back to review so the full pipeline runs again on the next build.
+    repo.setCoverStatus(db, cover.id, "needs_review", { error: "", qc: null });
+    db.prepare("UPDATE covers SET decided_at = '', updated_at = ? WHERE id = ?").run(
+      nowIso(),
+      cover.id
+    );
+    enqueueBuild(db, account().id, cover.id);
+    return sendJson(res, 202, { coverId: cover.id, jobId: null, pending: true });
+  }
+
   async function deleteCover(req, res, ctx) {
     const cover = await coverOr404(ctx.params.id);
     const projectId = cover.project_id;
@@ -534,27 +551,7 @@ export function createApp(options = {}) {
   const getLlmSettings = async (req, res) =>
     sendJson(res, 200, publicLlmConfig(llmConfig(db, account().id, secret)));
 
-  async function putLlmSettings(req, res) {
-    const body = await readJson(req);
-    const current = llmConfig(db, account().id, secret);
-    let patch;
-    try {
-      patch = normalizeLlmPatch(body, {
-        provider: current.provider,
-        ollamaHost: current.ollama.host,
-        ollamaTextModel: current.ollama.textModel,
-        ollamaVisionModel: current.ollama.visionModel,
-        openrouterTextModel: current.openrouter.textModel,
-        openrouterVisionModel: current.openrouter.visionModel,
-      });
-    } catch (err) {
-      throw new HttpError(err.status || 400, err.message);
-    }
-    repo.setSettings(db, account().id, patch);
-    return sendJson(res, 200, publicLlmConfig(llmConfig(db, account().id, secret)));
-  }
-
-  /** Explicit opt-in network call: used by Settings → Check connection. */
+  /** Explicit opt-in network call for API clients that want model discovery. */
   async function getLlmModels(req, res) {
     const config = llmConfig(db, account().id, secret);
     try {
@@ -565,15 +562,25 @@ export function createApp(options = {}) {
     }
   }
 
-  async function putKey(req, res) {
-    const body = await readJson(req);
-    try {
-      auth.setProviderKey(db, account().id, String(body.name || ""), String(body.value || ""), secret);
-    } catch (err) {
-      throw new HttpError(err.status || 400, err.message);
+  /** Search RAWG games using the account's stored RAWG key. Used by the frontend
+   *  game browser so users can pick titles to import without typing them manually. */
+  async function getRawgSearch(req, res) {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const q = String(url.searchParams.get("q") || "").trim();
+    const platform = String(url.searchParams.get("platform") || "");
+    if (!q) throw new HttpError(400, "Query parameter 'q' is required.");
+
+    const key = auth.providerKey(db, account().id, "rawg");
+    if (!key) {
+      throw new HttpError(400, "No RAWG API key configured. Set RAWG_KEY in .env, then restart the server.");
     }
-    const names = auth.providerKeyNames(db, account().id);
-    return sendJson(res, 200, { keys: { rawg: names.has("rawg"), openrouter: names.has("openrouter") } });
+
+    try {
+      const games = await rawgSearch(q, { platform: platform || undefined, key });
+      return sendJson(res, 200, { games, count: games.length });
+    } catch (err) {
+      throw new HttpError(502, `RAWG search failed: ${err.message}`);
+    }
   }
 
   /* ------------------------------------------------------------ routing */
@@ -596,15 +603,15 @@ export function createApp(options = {}) {
     ["POST", /^\/api\/covers\/([^/]+)\/build$/, buildCoverRoute],
     ["POST", /^\/api\/covers\/([^/]+)\/render$/, rerenderCover],
     ["POST", /^\/api\/covers\/([^/]+)\/decision$/, decideCover],
+    ["POST", /^\/api\/covers\/([^/]+)\/retry$/, retryCover],
     ["DELETE", /^\/api\/covers\/([^/]+)$/, deleteCover],
     ["PUT", /^\/api\/covers\/([^/]+)\/art\/([^/]+)$/, uploadArt],
     ["GET", /^\/api\/covers\/([^/]+)\/art\/([^/]+)$/, getArt],
     ["GET", /^\/api\/renders\/([^/]+)\/([^/]+)$/, getRender],
     ["GET", /^\/api\/settings$/, getSettings],
-    ["PUT", /^\/api\/settings\/keys$/, putKey],
     ["GET", /^\/api\/settings\/llm$/, getLlmSettings],
-    ["PUT", /^\/api\/settings\/llm$/, putLlmSettings],
     ["GET", /^\/api\/settings\/models$/, getLlmModels],
+    ["GET", /^\/api\/rawg\/search$/, getRawgSearch],
   ];
 
   async function handle(req, res) {

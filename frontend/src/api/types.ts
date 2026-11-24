@@ -191,3 +191,14 @@ export interface ProjectDetailResponse {
   covers: Cover[];
   pending: number;
 }
+
+export interface RawgGame {
+  id: number;
+  slug: string;
+  name: string;
+  released: string | null;
+  rating: string | null;
+  metacritic: number | null;
+  backgroundImage: string | null;
+  platforms: string[];
+}

@@ -1,9 +1,8 @@
 # Coverpress
 
 Print-ready PS4/PS5 case inserts for the games you own digitally. Import a list of
-titles, bring artwork, and get 300 DPI wraps with the band, spine, back-cover copy,
-spec chips, legal text and barcode already laid out — with the uncertain ones held back
-for review instead of printed.
+titles, and the app fetches metadata and art automatically, renders 300 DPI wraps,
+and holds uncertain covers for review before printing.
 
 ```
 Web  ─── frontend/               React app on :5173, proxies /api to :3000
@@ -11,93 +10,105 @@ API  ─── server/index.mjs        JSON, local mode, no sessions
 CLI  ─── pipeline.mjs            same renderer, no browser, no network needed
 ```
 
-## Run it
+## Run the web app (one command)
 
-No terminal commands are needed after the first install: on macOS double-click
-`Start Coverpress.command`. It starts the API, waits for `/api/health`, starts the
-web app and opens your browser at `http://127.0.0.1:5173`.
+**macOS:** Double-click `Start Coverpress.command`. It starts the API, waits for it
+to be ready, starts the web app, and opens your browser at `http://127.0.0.1:5173`.
 
-From a terminal the equivalent is:
-
-```bash
-npm install                 # once
-cp .env.example .env        # optional
-npm run dev                 # API :3000 + web :5173, browser opens
-```
-
-For API-only work: `npm run dev:api` (:3000) or `npm run dev:web` (:5173, expects the
-API already running). The frontend spec is `docs/FRONTEND-PLAN.md`.
-
-To serve the built app as one origin, build it (`npm --prefix frontend run build`),
-start the API with `APP_ORIGIN` pointing at the web host, then run `npm run serve`
-(:8080 by default). The API itself still serves JSON only.
-
-## API
-
-The JSON API remains directly usable without the browser:
+**Terminal (equivalent):**
 
 ```bash
-curl -s localhost:3000/api/me
-curl -s -X POST localhost:3000/api/projects \
-  -H 'content-type: application/json' -d '{"name":"Shelf 2026","platform":"PS5"}'
-curl -s -X POST localhost:3000/api/projects/<id>/import \
-  -H 'content-type: application/json' -d '{"titles":"Bloodborne|PS5|manual"}'
-curl -s -X PUT localhost:3000/api/covers/<coverId>/art/front \
-  -H 'content-type: image/png' --data-binary @front.png
-curl -s localhost:3000/api/projects/<id>/status
-curl -s localhost:3000/api/projects/<id>/print
+# 1. Install dependencies (once)
+npm install
+
+# 2. Copy the env template (optional — Ollama needs no key)
+cp .env.example .env
+
+# 3. Start API + web app, browser opens automatically
+npm run dev
 ```
 
-Uploading a front queues the build; the cover appears at `needs_review` or
-`auto_approved` with its QC score, and its `wrapUrl` becomes printable.
+The app runs entirely on `127.0.0.1`. No sign-up, no login, no sessions — one local
+account is created on first boot.
 
-### No auth, on purpose
+## Run from the terminal only
 
-Local mode uses one account (the oldest row in `accounts`, created on first boot).
-That is fine on `127.0.0.1` and **not** fine on a public interface: every request is
-that account. Do not bind `0.0.0.0` until accounts are switched back on. The schema
-still carries `account_id` on every row, so restoring multi-user is a routing change,
-not a migration.
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Start API (:3000) + web app (:5173), open browser |
+| `npm run dev:api` | Start API only (:3000) |
+| `npm run dev:web` | Start web app only (:5173, API must already be running) |
+| `npm run serve` | Serve the built frontend on :8080 (production-style, API proxied) |
+| `npm test` | Run the test suite (real API, ephemeral port, temp data dir) |
+| `npm run smoke` | Offline render check: 3260 × 1819 px wrap, no keys, no network |
 
-- **Plan limits** — Free: 10 covers/month, 2 projects. Studio: 500 covers/month,
-  50 projects. Enforced at import, so no provider quota is spent on covers that cannot
-  be stored. `npm run plan studio` changes the local account's plan live.
-- **Provider keys** — RAWG / OpenRouter keys are sealed with AES-256-GCM and used only
-  server-side; no route returns a value. SteamGridDB is deliberately not connected:
-  its terms are personal, non-commercial use only. `postman/` has a collection for
-  testing RAWG and SteamGridDB directly; keep SGDB in the CLI.
-- **Language model** — Ollama is the default (`http://127.0.0.1:11434`, local, no key).
-  It supplies back-cover copy, art prompts and vision review. OpenRouter `:free`
-  models remain selectable under Settings. No provider generates images and every
-  template slot has a deterministic fallback, so a cover still renders without one.
-- **Legal** — `GET /api/legal` returns the acceptable-use text as data. Read
-  `docs/LEGAL-AND-VIABILITY.md` before charging money.
-- **Approval** — a cover is printable when it is `approved` (by hand) or
-  `auto_approved` (zero QC warnings). A hand approval survives later rebuilds.
-- **Print** — `GET /api/projects/:id/print` returns the page plan in millimetres
-  (276 × 154 mm, 270 × 148 mm trim, one approved cover per A4 landscape page). The
-  frontend renders it; the server no longer emits an HTML sheet.
+## Import games automatically
 
-Data lives in `data/` (SQLite, uploads, renders). Back that directory up.
+### Search and import from RAWG (no typing)
 
-## Tests
+Open a shelf and click **Browse RAWG**. Search the RAWG catalog using the key you
+saved in **Settings → Provider Keys** (or `RAWG_KEY` in `.env`), pick as many games
+as you like, and click **Import games**. Selected titles go straight through the
+automatic pipeline — metadata fetch, screenshots, render, review. No typing and no
+manual image upload.
+
+The browser calls `GET /api/rawg/search?q=<query>&platform=PS5|PS4`. It needs a
+configured RAWG key; without one the API returns a guidance error. SteamGridDB is
+deliberately not part of this flow (see below).
+
+### Paste titles (manual entry)
+
+You can still paste titles in the import panel on a shelf:
+
+```
+Elden Ring | PS5 | auto
+Hollow Knight | PS5 | auto
+Celeste | PS4 | manual
+```
+
+- `auto` — fetches RAWG metadata and screenshots, renders, and sends to review. No
+  manual upload needed.
+- `manual` — creates the cover without fetching; you upload front art yourself.
+
+Each cover lands in **review** (`needs_review`) where you can adjust the title,
+anchor, zoom, offsets, edition line and ribbon, then **Approve** or **Reject**.
+If you don't approve, click **"Run all steps again"** to re-fetch metadata/art,
+re-render, and return to review with a new version.
+
+Approved covers become printable; the print screen lays them out one per A4
+landscape page at the correct millimetres.
+
+## First-time setup (recommended)
 
 ```bash
-npm test        # node:test, real API on an ephemeral port, temp data dir
-npm run smoke   # offline render check: 3260 x 1819 px wrap, no keys, no network
+# Install Ollama and pull models (local LLM, no key, no quota)
+ollama pull llama3.2
+ollama pull llava
+
+# Get a free RAWG key (20,000 requests/month) for metadata/screenshots
+# https://rawg.io/apidocs
+# Add it to .env or paste it in Settings → Provider Keys in the web app.
 ```
 
-53 tests cover: the JSON-only surface (no page routes exist), single-account local mode,
-project/cover CRUD, import and quota limits, upload validation by magic bytes, the build
-queue → QC → render versioning, override whitelisting, decisions, print plan in
-millimetres, sealed keys, cross-origin refusal, path traversal, the Ollama HTTP boundary
-and the LLM settings routes. Live RAWG/SteamGridDB calls and real model inference are
-not exercised — import the Postman collection or run the app against your own keys.
+SteamGridDB is **not** connected in the web app — its Terms of Use allow personal,
+non-commercial use only. It remains available in the offline CLI and in the
+Postman collection (`postman/coverpress-apis.json`) for direct API testing.
 
-## CLI
+## Environment
 
-The offline harness for the renderer, and the only place SteamGridDB may be used
-(personal, non-commercial use).
+Copy `.env.example` to `.env` and fill in what you need:
+
+| Variable | Purpose |
+| --- | --- |
+| `RAWG_KEY` | RAWG.io API key for metadata/screenshots (web app + CLI) |
+| `OLLAMA_HOST` | Ollama URL (default `http://127.0.0.1:11434`) |
+| `OLLAMA_TEXT_MODEL` | Text model for back-cover copy (default `llama3.2`) |
+| `OLLAMA_VISION_MODEL` | Vision model for QC review (default `llava`) |
+| `OPENROUTER_KEY` | Optional hosted alternative to Ollama |
+| `PORT`, `HOST` | API bind address (default `127.0.0.1:3000`) |
+| `DATA_DIR` | Where SQLite, uploads and renders live (default `data/`) |
+
+## CLI (offline batch)
 
 ```bash
 npm run build      # fetch, compose, auto-check games.txt
@@ -105,20 +116,23 @@ npm run rebuild    # same, ignoring the cache
 npm run print      # A4 print sheet of approved covers
 npm run prompts    # write art prompts to art/<slug>/PROMPTS.md
 npm run models     # list installed Ollama models (or OpenRouter :free models)
+npm run plan studio   # change the local account's plan
+npm run usage        # show covers/projects used this month
 ```
 
-## How a cover is built
+`games.txt` format: `Title | Platform | mode` where mode is `auto` or `manual`.
 
+## Data
+
+SQLite, uploads, renders and the generated secret key live in `data/`. Back that
+directory up — it contains all your covers, decisions and render history.
+
+## Tests
+
+```bash
+npm test        # 57 tests, real API on ephemeral port, temp data dir
+npm run smoke   # offline render check, no keys, no network
 ```
-titles ─→ metadata (RAWG, optional) ─→ compose wrap ─→ auto-check ─┬─ auto_approved ─┐
-             ↑                              ↑                      ├─ needs_review ──┼→ print plan
-        art upload (always yours)      lib/cover.mjs              └─ failed         ┘
-```
 
-The renderer is millimetre-based and canvas-only (`lib/render.mjs`), the QC rules are
-deterministic and pixel-sampled (`lib/qc.mjs`), and both are shared by the API and the
-CLI — there is no second implementation to drift.
-
-Docs: `docs/FRONTEND-PLAN.md` (the rebuild), `docs/SAAS-PLAN.md` (architecture,
-security), `docs/LEGAL-AND-VIABILITY.md` (terms research), `docs/USER-STORIES.md`
-(product requirements).
+Docs: `docs/FRONTEND-PLAN.md`, `docs/SAAS-PLAN.md`, `docs/LEGAL-AND-VIABILITY.md`,
+`docs/USER-STORIES.md`.

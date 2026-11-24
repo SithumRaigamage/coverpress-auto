@@ -1,14 +1,8 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useForm } from 'react-hook-form';
 import { Link } from 'react-router';
-import { Database, KeyRound, Layers3, ScrollText, ShieldCheck, Sparkles } from 'lucide-react';
-import { api, errorMessage } from '../../api/client';
-import { useSaveLlm, useSetKey } from '../../api/mutations';
+import { Database, Info, KeyRound, Layers3, ScrollText, ShieldCheck, Sparkles } from 'lucide-react';
+import { errorMessage } from '../../api/client';
 import { useLlmSettings, useSettings } from '../../api/queries';
-import { Button, Chip, ErrorPanel, Field, Meter, Skeleton } from '../../components/ui';
-import { useToast } from '../../components/Toast';
-import { keySchema, llmSchema, type KeyValues, type LlmValues } from '../../lib/schemas';
+import { Chip, ErrorPanel, Meter, Skeleton } from '../../components/ui';
 
 function LocalModeNotice() {
   return (
@@ -22,28 +16,10 @@ function LocalModeNotice() {
   );
 }
 
+/** Read-only configuration status. Keys and model settings are set in .env. */
 export function Settings() {
   const settingsQuery = useSettings();
   const llmQuery = useLlmSettings();
-  const setKeyMutation = useSetKey();
-  const saveLlm = useSaveLlm();
-  const { toast } = useToast();
-  const [checking, setChecking] = useState(false);
-  const [checkMessage, setCheckMessage] = useState<string | null>(null);
-
-  const keyForm = useForm<KeyValues>({ resolver: zodResolver(keySchema), defaultValues: { value: '' } });
-  const llmForm = useForm<LlmValues>({
-    resolver: zodResolver(llmSchema),
-    defaultValues: {
-      provider: 'ollama',
-      ollama: { host: 'http://127.0.0.1:11434', textModel: 'llama3.2', visionModel: 'llava' },
-      openrouter: { textModel: 'openrouter/free', visionModel: 'openrouter/free' },
-    },
-  });
-
-  useEffect(() => {
-    if (llmQuery.data) llmForm.reset(llmQuery.data);
-  }, [llmQuery.data, llmForm]);
 
   if (settingsQuery.isPending || llmQuery.isPending) {
     return (
@@ -64,45 +40,6 @@ export function Settings() {
   const { account, keys, unsupported, storage } = settingsQuery.data;
   const llm = llmQuery.data;
 
-  async function saveKey(name: 'rawg' | 'openrouter', value: string, reset: () => void) {
-    try {
-      await setKeyMutation.mutateAsync({ name, value });
-      reset();
-      toast(value ? `${name.toUpperCase()} key saved` : `${name.toUpperCase()} key cleared`, { tone: 'success' });
-    } catch (error) {
-      toast('Could not save the key', { description: errorMessage(error), tone: 'error' });
-    }
-  }
-
-  async function checkConnection() {
-    setChecking(true);
-    setCheckMessage(null);
-    try {
-      await api.health();
-      const models = await api.llmModels();
-      setCheckMessage(
-        models?.length
-          ? `Local API reachable. Model discovery: ${models.slice(0, 3).join(', ')}${models.length > 3 ? '…' : ''}`
-          : 'Local API reachable. No models were returned by this provider.',
-      );
-    } catch (error) {
-      setCheckMessage(errorMessage(error));
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  function submitLlm(event: FormEvent) {
-    void llmForm.handleSubmit(async (values) => {
-      try {
-        await saveLlm.mutateAsync(values);
-        toast('LLM settings saved', { tone: 'success' });
-      } catch (error) {
-        toast('Could not save LLM settings', { description: errorMessage(error), tone: 'error' });
-      }
-    })(event);
-  }
-
   return (
     <div className="screen">
       <header className="screen-header">
@@ -114,6 +51,18 @@ export function Settings() {
       </header>
 
       <LocalModeNotice />
+
+      <div className="notice notice--info" role="note">
+        <Info size={17} />
+        <div>
+          <strong>Configuration lives in <code>.env</code></strong>
+          <p>
+            API keys and Ollama settings are read from your <code>.env</code> file when the server starts.
+            Edit that file and restart with <code>npm run dev</code>. Nothing on this page can be changed
+            from the browser.
+          </p>
+        </div>
+      </div>
 
       <div className="settings-grid">
         <section className="panel settings-card">
@@ -133,34 +82,18 @@ export function Settings() {
         <section className="panel settings-card">
           <div className="card-head">
             <span className="card-head__icon"><KeyRound size={17} /></span>
-            <div><h2>Provider keys</h2><p>Keys are sealed server-side and never shown to the browser.</p></div>
+            <div><h2>Provider keys</h2><p>Read from <code>.env</code> at startup.</p></div>
           </div>
-          <form className="key-row" onSubmit={(event) => void keyForm.handleSubmit((values) => saveKey('rawg', values.value, () => keyForm.reset()))(event)}>
-            <div className="key-row__head"><strong>RAWG</strong><Chip tone={keys.rawg ? 'ok' : 'neutral'}>{keys.rawg ? 'Saved' : 'Not set'}</Chip></div>
-            <Field label="API key" error={keyForm.formState.errors.value?.message}>
-              <input type="password" autoComplete="off" placeholder={keys.rawg ? 'Replace key…' : 'Paste key…'} {...keyForm.register('value')} />
-            </Field>
-            <div className="inline-row">
-              <Button type="submit" variant="primary" disabled={!keyForm.watch('value') || setKeyMutation.isPending}>Save</Button>
-              <Button
-                disabled={!keys.rawg || setKeyMutation.isPending}
-                onClick={() => void saveKey('rawg', '', () => keyForm.reset())}
-              >Clear</Button>
+          <dl className="detail-list">
+            <div>
+              <dt>RAWG <span className="mono">RAWG_KEY</span></dt>
+              <dd><Chip tone={keys.rawg ? 'ok' : 'neutral'}>{keys.rawg ? 'Configured' : 'Not set'}</Chip></dd>
             </div>
-          </form>
-          <form className="key-row" onSubmit={(event) => void keyForm.handleSubmit((values) => saveKey('openrouter', values.value, () => keyForm.reset()))(event)}>
-            <div className="key-row__head"><strong>OpenRouter</strong><Chip tone={keys.openrouter ? 'ok' : 'neutral'}>{keys.openrouter ? 'Saved' : 'Not set'}</Chip></div>
-            <Field label="API key" error={keyForm.formState.errors.value?.message}>
-              <input type="password" autoComplete="off" placeholder={keys.openrouter ? 'Replace key…' : 'Paste key…'} {...keyForm.register('value')} />
-            </Field>
-            <div className="inline-row">
-              <Button type="submit" variant="primary" disabled={!keyForm.watch('value') || setKeyMutation.isPending}>Save</Button>
-              <Button
-                disabled={!keys.openrouter || setKeyMutation.isPending}
-                onClick={() => void saveKey('openrouter', '', () => keyForm.reset())}
-              >Clear</Button>
+            <div>
+              <dt>OpenRouter <span className="mono">OPENROUTER_KEY</span></dt>
+              <dd><Chip tone={keys.openrouter ? 'ok' : 'neutral'}>{keys.openrouter ? 'Configured' : 'Not set'}</Chip></dd>
             </div>
-          </form>
+          </dl>
           <div className="notice notice--warn">
             <ShieldCheck size={17} />
             <div>
@@ -173,37 +106,15 @@ export function Settings() {
         <section className="panel settings-card">
           <div className="card-head">
             <span className="card-head__icon"><Sparkles size={17} /></span>
-            <div><h2>Language model</h2><p>Optional: cover copy works with deterministic fallbacks if unset.</p></div>
+            <div><h2>Language model</h2><p>Read from <code>.env</code> at startup.</p></div>
           </div>
-          <form className="form-grid" onSubmit={submitLlm}>
-            <Field label="Provider">
-              <select {...llmForm.register('provider')}>
-                <option value="ollama">Ollama (local)</option>
-                <option value="openrouter">OpenRouter (:free)</option>
-              </select>
-            </Field>
-            <Field label="Ollama host" error={llmForm.formState.errors.ollama?.host?.message}>
-              <input {...llmForm.register('ollama.host')} />
-            </Field>
-            <Field label="Text model" error={llmForm.formState.errors.ollama?.textModel?.message}>
-              <input {...llmForm.register('ollama.textModel')} />
-            </Field>
-            <Field label="Vision model" error={llmForm.formState.errors.ollama?.visionModel?.message}>
-              <input {...llmForm.register('ollama.visionModel')} />
-            </Field>
-            <Field label="OpenRouter text model">
-              <input {...llmForm.register('openrouter.textModel')} />
-            </Field>
-            <Field label="OpenRouter vision model">
-              <input {...llmForm.register('openrouter.visionModel')} />
-            </Field>
-            <div className="inline-row field--wide">
-              <Button type="submit" variant="primary" disabled={saveLlm.isPending}>Save model settings</Button>
-              <Button disabled={checking} onClick={() => void checkConnection()}>{checking ? 'Checking…' : 'Check connection'}</Button>
-            </div>
-          </form>
-          {checkMessage && <p className="notice notice--info" role="status">{checkMessage}</p>}
-          {llm?.openrouter.configured && <p className="subtle">OpenRouter key: set. Its value is never sent to this page.</p>}
+          <dl className="detail-list">
+            <div><dt>Provider</dt><dd className="mono">{llm?.provider ?? '—'}</dd></div>
+            <div><dt>Ollama host</dt><dd className="mono">{llm?.ollama.host ?? '—'}</dd></div>
+            <div><dt>Text model</dt><dd className="mono">{llm?.ollama.textModel ?? '—'}</dd></div>
+            <div><dt>Vision model</dt><dd className="mono">{llm?.ollama.visionModel ?? '—'}</dd></div>
+          </dl>
+          <p className="subtle">Cover copy works with deterministic fallbacks even when no model is reachable.</p>
         </section>
 
         <section className="panel settings-card">

@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
-import { Printer, RefreshCw, Sparkles } from 'lucide-react';
+import { Printer, RefreshCw, Search, Sparkles } from 'lucide-react';
 import { errorMessage } from '../../api/client';
 import { useBuildProject } from '../../api/mutations';
 import { useInvalidateOnIdle, useProject } from '../../api/queries';
@@ -10,6 +10,7 @@ import { mergeStatuses } from '../../lib/format';
 import { CoverGrid } from '../covers/CoverGrid';
 import { HouseStylePanel } from '../covers/HouseStylePanel';
 import { ImportPanel } from '../covers/ImportPanel';
+import { RawgBrowser } from '../covers/RawgBrowser';
 
 export function Shelf() {
   const { id = '' } = useParams();
@@ -17,6 +18,7 @@ export function Shelf() {
   const statusQuery = useInvalidateOnIdle(id);
   const buildAll = useBuildProject(id);
   const { toast } = useToast();
+  const [rawgOpen, setRawgOpen] = useState(false);
 
   const project = projectQuery.data?.project;
   const pending = statusQuery.data?.pending ?? projectQuery.data?.pending ?? 0;
@@ -74,6 +76,14 @@ export function Shelf() {
           >
             Build all
           </Button>
+          <Button
+            icon={<Search size={16} />}
+            variant="secondary"
+            onClick={() => setRawgOpen(true)}
+            disabled={pending > 0}
+          >
+            Browse RAWG
+          </Button>
           <Link className="btn btn--secondary btn--md" to={`/shelves/${project.id}/print`}>
             <Printer size={16} /> Print
           </Link>
@@ -101,6 +111,14 @@ export function Shelf() {
         </div>
       </div>
       <CoverGrid covers={covers} projectId={project.id} busy={pending > 0} />
+
+      <RawgBrowser
+        projectId={project.id}
+        platform={project.platform}
+        onImported={() => void statusQuery.refetch()}
+        open={rawgOpen}
+        onOpenChange={setRawgOpen}
+      />
 
       <p className="visually-hidden" aria-live="polite">
         {pending === 0 ? 'All builds finished.' : `${pending} builds pending.`}

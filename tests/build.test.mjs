@@ -9,6 +9,7 @@ import { boot, createProject, importTitles, coverIdOf, upload, png, get, post, g
 
 const server = await boot();
 after(() => server.stop());
+server.app.db.prepare("UPDATE accounts SET plan = 'studio'").run();
 
 const projectId = await createProject(server.url, "Build shelf");
 await importTitles(server.url, projectId, "Test Game");
@@ -83,4 +84,25 @@ test("an auto cover without a RAWG key fails with guidance, not a ReferenceError
   assert.equal(row.status, "failed");
   assert.match(row.error, /RAWG API key/);
   assert.doesNotMatch(row.error, /not defined/);
+});
+
+test("retry sends an unreviewed cover back into the build pipeline", async () => {
+  const projectId = await createProject(server.url, "Retry shelf");
+  await importTitles(server.url, projectId, "Retry Game | PS5 | manual");
+  const coverId = coverIdOf(server.app, projectId, "Retry Game");
+  await upload(server.url, coverId, png());
+  await server.app.worker.drain();
+
+  let row = server.app.db.prepare("SELECT status FROM covers WHERE id = ?").get(coverId);
+  assert.ok(["needs_review", "auto_approved"].includes(row.status), `expected needs_review/auto_approved, got ${row.status}`);
+
+  const res = await post(server.url, `/api/covers/${coverId}/retry`, {});
+  assert.equal(res.status, 202, await res.text());
+
+  row = server.app.db.prepare("SELECT status, decided_at FROM covers WHERE id = ?").get(coverId);
+  assert.equal(row.status, "queued");
+  assert.equal(row.decided_at, "");
+
+  const job = server.app.db.prepare("SELECT id FROM jobs WHERE cover_id = ? AND state = 'queued'").get(coverId);
+  assert.ok(job, "a queued build job should exist after retry");
 });

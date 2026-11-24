@@ -63,11 +63,12 @@ export function recordUsage(db, accountId, kind, ref = "") {
   );
 }
 
-/* --------------------------------------------------- sealed provider keys */
+/* --------------------------------------------------- provider keys (env) */
 
-// SteamGridDB is deliberately absent: its terms are personal, non-commercial
-// use only, so this service cannot hold a key for it.
-const KEY_NAMES = new Set(["rawg", "openrouter"]);
+// Keys are read from .env at boot; the browser has no way to set or overwrite
+// them. SteamGridDB is deliberately absent: its terms are personal,
+// non-commercial use only, so this service cannot hold a key for it.
+const KEY_ENV = { rawg: "RAWG_KEY", openrouter: "OPENROUTER_KEY" };
 
 export function loadSecret(dataDir, envSecret) {
   if (envSecret && String(envSecret).length >= 16) {
@@ -102,30 +103,14 @@ export function unseal(sealed, key) {
   }
 }
 
-export function setProviderKey(db, accountId, name, value, secret) {
-  if (!KEY_NAMES.has(name)) {
-    const err = new Error(`Unknown or unsupported provider "${name}".`);
-    err.status = 400;
-    throw err;
-  }
-  const trimmed = String(value ?? "").trim();
-  if (!trimmed) {
-    db.prepare("DELETE FROM provider_keys WHERE account_id = ? AND name = ?").run(accountId, name);
-    return;
-  }
-  db.prepare(
-    `INSERT INTO provider_keys (account_id, name, sealed, updated_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT (account_id, name) DO UPDATE SET sealed = excluded.sealed, updated_at = excluded.updated_at`
-  ).run(accountId, name, seal(trimmed, secret), nowIso());
+/** The raw key from the process environment. Never logged or sent to a client.
+ *  Extra arguments are accepted so existing call sites keep working. */
+export function providerKey(_db, _accountId, name) {
+  const variable = KEY_ENV[name];
+  return variable ? String(process.env[variable] || "").trim() : "";
 }
 
-/** Names only — never values. */
-export function providerKeyNames(db, accountId) {
-  const rows = db.prepare("SELECT name FROM provider_keys WHERE account_id = ? ORDER BY name").all(accountId);
-  return new Set(rows.map((r) => r.name));
-}
-
-export function providerKey(db, accountId, name, secret) {
-  const row = db.prepare("SELECT sealed FROM provider_keys WHERE account_id = ? AND name = ?").get(accountId, name);
-  return row ? unseal(row.sealed, secret) : "";
+/** Which providers are configured — names only, never values. */
+export function providerKeyNames() {
+  return new Set(Object.keys(KEY_ENV).filter((name) => providerKey(null, null, name)));
 }

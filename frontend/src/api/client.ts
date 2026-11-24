@@ -14,6 +14,7 @@ import type {
   ProjectDetailResponse,
   ProjectListResponse,
   ProjectStatus,
+  RawgGame,
   Settings,
   Account,
 } from './types';
@@ -105,6 +106,17 @@ export const api = {
       method: 'POST',
       body: body({ decision, ...(overrides ? { overrides } : {}) }),
     }),
+  /** Re-run the full pipeline for an unreviewed / failed / rejected cover. */
+  retryCover: (id: string) =>
+    request<{ coverId: string; pending: boolean }>(`/covers/${segment(id)}/retry`, {
+      method: 'POST',
+      body: body({}),
+    }),
+  /** Search RAWG games using the account's stored RAWG key. */
+  rawgSearch: (q: string, platform?: string) =>
+    request<{ games: RawgGame[]; count: number }>(
+      `/rawg/search?q=${encodeURIComponent(q)}${platform ? `&platform=${encodeURIComponent(platform)}` : ''}`,
+    ),
   deleteCover: (id: string) =>
     request<{ deleted: string; projectId: string }>(`/covers/${segment(id)}`, { method: 'DELETE' }),
   uploadArt: (id: string, slot: string, file: File) =>
