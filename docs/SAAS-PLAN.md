@@ -36,7 +36,8 @@ Decisions:
   licence requires attribution; reselling it would be a licensing problem, not just a
   cost one. Keys are stored per account and sealed with AES-256-GCM.
 - **No SteamGridDB in the hosted product.** Its terms are personal/non-commercial only,
-  and its grids frequently contain retail logo lockups. Front art is always uploaded.
+  and its grids frequently contain retail logo lockups. The local app may opt in with
+  `SGDB_KEY`; a hosted deployment must leave it unset.
   See `docs/LEGAL-AND-VIABILITY.md` for the full legal position and what it costs.
 - **Billing is deliberately manual in v2.** `server/cli.mjs plan <email> studio` records
   the upgrade; a payment provider is the first item in M1. Shipping a fake checkout is

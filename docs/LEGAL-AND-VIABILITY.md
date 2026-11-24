@@ -61,10 +61,13 @@ one making the requests. On top of the contract problem, the "grid" category fre
 contains finished retail art with the real logo lockup baked in — the exact thing the
 renderer is built to avoid.
 
-**What changed in the product:** the SaaS no longer calls SteamGridDB at all. Portrait
-front art is always uploaded by the customer. The CLI (personal, local) still supports
-it. This is enforced in `server/build.mjs` and stated on the settings page and in the
-acceptable-use page.
+**What changed in the product:** a hosted or paid deployment does not call SteamGridDB.
+The local, single-user app may opt in for personal use by setting `SGDB_KEY` in `.env`
+(off by default); the key stays server-side, the settings page states the personal-use
+restriction, and the footer credits SteamGridDB whenever it is on. Grids are requested in
+no-logo/alternate/blurred/material styles to avoid baked-in logo lockups. The CLI
+(personal, local) supports it as before. Leaving `SGDB_KEY` unset is a launch requirement
+for any hosted version.
 
 ### RAWG — ambiguous, needs written permission or a paid plan
 
@@ -96,11 +99,13 @@ panel (already implemented). Do not build the product around the free tier.
 
 ## 3. What is now in the product because of this
 
-- SteamGridDB removed from the hosted service (`server/build.mjs`, `server/auth.mjs`).
-- Front art must be uploaded; auto mode fetches **metadata and screenshots only**.
+- SteamGridDB is off unless `SGDB_KEY` is set in `.env` (local, personal use only); a
+  hosted deployment leaves it unset (`server/auth.mjs`, `server/catalog.mjs`).
+- Front art is fetched automatically (RAWG screenshots and backgrounds, plus SteamGridDB
+  when enabled) and ranked by fit; uploading is a hidden override in review.
 - `GET /api/legal` returns the acceptable-use text as data (`server/legal.mjs`), so the frontend renders it without the rules living in markup.
 - A takedown contact slot: set `LEGAL_CONTACT` in the environment.
-- Tests assert the legal page exists and that no SGDB key can be stored.
+- Tests assert the legal page exists, that SteamGridDB is never called without `SGDB_KEY`, and that its restriction is stated.
 
 What a lawyer should still write for you, before charging: Terms of Service, Privacy
 Policy (you hold emails, uploads and IP addresses), a DMCA/takedown procedure, and a

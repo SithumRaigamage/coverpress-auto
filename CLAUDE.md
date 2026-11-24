@@ -6,8 +6,7 @@ easy to get wrong and expensive to get wrong late.
 ## What this is
 
 Print-ready PS4/PS5 case inserts for digital games: a JSON API, a local CLI that
-shares the same renderer, and a browser frontend being rebuilt from zero
-(`docs/FRONTEND-PLAN.md`).
+shares the same renderer, and a React frontend in `frontend/` (`docs/FRONTEND-PLAN.md`).
 
 ```
 client ─→ server/index.mjs (JSON API, local mode, no sessions) ─→ repo.mjs ─→ SQLite (data/)
@@ -84,15 +83,16 @@ item, not official, and not for sale.
 | Service | Free tier | Role |
 | --- | --- | --- |
 | RAWG | 20,000 req/month, key as query param | Title match, description, publisher, ESRB rating, screenshots. **Backlink attribution is a licensing condition** — print "Game data by RAWG.io" on the back panel. |
-| SteamGridDB | Free key, Bearer auth | 600×900 portrait grids. **Do not use it in the hosted app**: its Terms of Use are personal, non-commercial only, so a paid service calling it (even with the customer's key) is a ToS breach. The CLI may use it for a personal batch. Its "grid" category is often finished retail art with the real logo lockup baked in. |
+| SteamGridDB | Free key, Bearer auth | 600×900 portrait grids and hero banners. Its Terms of Use are personal, non-commercial only. The CLI and the **local** web app may call it, and only when `SGDB_KEY` is set in `.env` (off by default). **Never in a hosted or paid deployment** — a paid service calling it, even with the customer's key, is a ToS breach. Its "grid" category is often finished retail art with the real logo lockup baked in; the server requests no-logo/alternate/blurred/material styles only. |
 | OpenRouter | `:free` models — 20 req/min, 50 req/day unfunded, 1,000/day after a one-time $10 purchase | Back-cover copy, art prompts, vision review. |
 | Gemini | Flash models, 10 req/min, 1,500 req/day | Same jobs, alternative provider. |
 
 **No free image generation exists.** Gemini's image API has no free tier and
 `gemini-2.5-flash-image-preview` was retired on 15 Jan 2026. Nano Banana 2 via Google
-AI Plus is the consumer app only — no API. So custom art is an **upload** in the web app
-and a drop-in folder in the CLI, never a pipeline API step. Do not write code that tries
-to generate images.
+AI Plus is the consumer app only — no API. So art is **fetched** (RAWG, plus SteamGridDB
+when enabled) and ranked by fit against the panel (`artFit` in `lib/qc.mjs`). Uploading is a
+hidden override in review; the CLI has a drop-in folder. Generation is never a pipeline
+step. Do not write code that tries to generate images.
 
 Which OpenRouter models carry `:free` rotates. Never hardcode a model ID as the only
 option — `npm run models` queries `/api/v1/models` and filters for `:free`, separating
@@ -111,7 +111,8 @@ the takedown address returned alongside it.
 Before changing pricing, adding a provider or adding an image source, read
 `docs/LEGAL-AND-VIABILITY.md`. Rules that came out of that research:
 
-- Never call SteamGridDB from the server. Art is always uploaded by the customer.
+- SteamGridDB is called server-side only when `SGDB_KEY` is set (local, personal use). A
+  hosted or paid deployment must leave it unset. The UI credits it whenever it is on.
 - RAWG's commercial terms are ambiguous (docs say small commercial use is fine; the
   pricing page sells it as a Business plan). Do not assume the free tier covers a paid
   product.
@@ -139,10 +140,12 @@ Before changing pricing, adding a provider or adding an image source, read
   Transient errors retry with backoff; user-fixable errors are `permanent`.
 - **Quota is charged at ingest**, not at render: re-renders must cost nothing or reviewers
   stop fixing covers.
-- **The frontend is planned, not present.** `docs/FRONTEND-PLAN.md` is the spec:
-  React + TS + Vite in `frontend/`, TanStack Query, design tokens, routes and
-  milestones. Do not add a view layer to `server/` and do not re-create
-  `server/public/` — the previous server-rendered UI was deleted deliberately.
+- **The frontend lives in `frontend/`** (React + TS + Vite, TanStack Query, Tailwind v4
+  over `src/styles/tokens.css`). `docs/FRONTEND-PLAN.md` is the spec. Only `src/api/*`
+  calls `fetch`. Do not add a view layer to `server/` and do not re-create
+  `server/public/`. The main flow is automated: no upload or typing step.
+- **Pipeline progress lives on the job row** (`server/progress.mjs`): the build reports
+  seven steps and log lines; `GET /api/covers/:id/run` reads them. Keep step keys stable.
 - **Wire plan changes through the database row, not a cached account object**: the
   operator can change the plan while the process runs, and quota must follow.
 - Cache all fetched metadata and images under `data/art/` (SaaS) or `out/.cache/` (CLI)
