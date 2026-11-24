@@ -41,6 +41,19 @@ test('search → generate → run completes → approve → print', async ({ pag
   await expect(wrap).toBeVisible();
   await expect(wrap).toHaveAttribute('src', /\/api\/renders\/[\w-]+\/wrap\.png$/);
   await expect(page.getByRole('button', { name: /Print \(1\)/ })).toBeEnabled();
+  await expect(page.getByRole('note')).toHaveText('Print at 100% / Actual size, do not fit to page.');
+
+  // In print media the wrap is exactly 276 × 154 mm (270 × 148 trim + 3 mm bleed) at 96 CSS px per inch.
+  await page.emulateMedia({ media: 'print' });
+  const mm = (px: number) => (px * 25.4) / 96;
+  const box = await wrap.boundingBox();
+  expect(mm(box!.width)).toBeCloseTo(276, 1);
+  expect(mm(box!.height)).toBeCloseTo(154, 1);
+  const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+  const mediaBox = /\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/.exec(pdf.toString('latin1'));
+  // A4 landscape in PDF points: 841.89 × 595.28.
+  expect(Number(mediaBox![1])).toBeCloseTo(841.89, 0);
+  expect(Number(mediaBox![2])).toBeCloseTo(595.28, 0);
 });
 
 test('Run again adds a new version to the same card, and any version can be approved', async ({ page }) => {

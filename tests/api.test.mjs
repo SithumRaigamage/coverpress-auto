@@ -209,12 +209,17 @@ test("the print plan is JSON in millimetres, not an HTML sheet", async () => {
   assert.equal(body.pageWidthMm, 276);
   assert.equal(body.pageHeightMm, 154);
   assert.equal(body.trimMm.width, 270);
+  assert.equal(body.trimMm.height, 148);
+  assert.deepEqual(body.panelsMm, { back: 128, spine: 14, front: 128 }, "the Blu-ray keepcase, PS4 and PS5 alike");
+  assert.equal(body.bleedMm, 3);
   assert.equal(body.paper.orientation, "landscape");
+  assert.equal(body.paper.scale, 100);
   assert.equal(body.pages.length, 1);
   assert.equal(body.pages[0].title, "Test Game");
   assert.equal(body.pages[0].widthMm, 276);
   assert.match(body.pages[0].wrapUrl, /^\/api\/renders\/.+\/wrap\.png$/);
   assert.match(body.instructions, /100%/);
+  assert.match(body.instructions, /do not fit to page/);
 });
 
 test("an approved cover survives a rebuild", async () => {

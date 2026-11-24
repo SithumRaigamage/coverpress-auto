@@ -154,6 +154,8 @@ export interface PrintPlan {
   project: { id: string; name: string };
   paper: { size: string; orientation: string; marginMm: number; scale: number };
   trimMm: { width: number; height: number };
+  /** back + spine + front = trim width (128 + 14 + 128 for the Blu-ray keepcase). */
+  panelsMm: { back: number; spine: number; front: number };
   bleedMm: number;
   pageWidthMm: number;
   pageHeightMm: number;

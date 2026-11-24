@@ -106,3 +106,33 @@ test("art fit ranks a print-size portrait over a 16:9 screenshot", async () => {
   assert.equal(artFit(1920, 1080).printReady, false, "landscape is a heavy crop, as runChecks warns");
   assert.equal(artFit(0, 0).score, 0);
 });
+
+test("a bottom-anchored title never crosses the rating box", async () => {
+  const { renderPanel, DPMM } = await import("../lib/render.mjs");
+  // Render the front with and without the title. Wherever they differ is title
+  // ink (title + edition line). The rating box is drawn on top, so it would hide
+  // an overlap — compare the ink's bounding box to the box's rectangle instead.
+  for (const subtitle of ["", "Standard Edition"]) {
+    const base = coverCfg({ meta: { name: "Paper Comet", genres: [] }, overrides: { titleAnchor: "bottom", titleSize: 18 } });
+    base.subtitle = subtitle;
+    const panel = (cfg) => renderPanel("front", cfg, { front: null, shots: [] }).getContext("2d");
+    const w = Math.round(128 * DPMM);
+    const h = Math.round(148 * DPMM);
+    const a = panel(base).getImageData(0, 0, w, h).data;
+    const b = panel({ ...base, title: " ", subtitle: "" }).getImageData(0, 0, w, h).data;
+    let maxY = -1;
+    let minX = Infinity;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 30) {
+          if (y > maxY) maxY = y;
+          if (x < minX) minX = x;
+        }
+      }
+    }
+    const boxTop = (148 - 9 - 14) * DPMM; // rating box: PAD 9 mm from the foot, 14 mm tall
+    assert.ok(minX < 20 * DPMM, "the title starts at the left margin, over the rating box column");
+    assert.ok(maxY < boxTop, `title ink reaches ${(maxY / DPMM).toFixed(1)} mm; the rating box starts at ${boxTop / DPMM} mm (subtitle: "${subtitle}")`);
+  }
+});

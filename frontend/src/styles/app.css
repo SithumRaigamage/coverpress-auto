@@ -131,10 +131,13 @@
   .no-print {
     display: none !important;
   }
+  /* One sheet per A4 landscape page: 281 × 180 mm inside the 8 mm margin.
+     The wrap image is exactly 276 × 154 mm (270 × 148 trim + 3 mm bleed). */
   .print-page {
     break-after: page;
-    width: 276mm;
-    height: 154mm;
+    break-inside: avoid;
+    width: 281mm !important;
+    height: 180mm !important;
     margin: 0;
     border: 0 !important;
     box-shadow: none !important;

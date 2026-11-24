@@ -33,6 +33,7 @@ import { createGenerator, MAX_PER_PRESS } from "./generated.mjs";
 import { GeminiError, GEMINI_DEFAULT_MODEL } from "../lib/gemini.mjs";
 import { PIPELINE_STEPS, jobRunDto, progressReporter } from "./progress.mjs";
 import { STYLES } from "../lib/cover.mjs";
+import { CASE } from "../lib/render.mjs";
 import { LEGAL } from "./legal.mjs";
 import {
   HttpError,
@@ -50,8 +51,10 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, "..");
 
-// Wrap + bleed, and panel height + bleed — what the print document must be.
-const PRINT = { widthMm: 276, heightMm: 154 };
+// PS4 and PS5 share the Blu-ray keepcase: back 128 + spine 14 + front 128 = 270 mm
+// wide, 148 mm tall, plus 3 mm bleed each side. Derived from the renderer's CASE so
+// the print sheet and the render can never disagree.
+const TRIM = { width: CASE.panelW * 2 + CASE.spine, height: CASE.panelH };
 
 const parse = (text) => {
   try {
@@ -456,19 +459,20 @@ export function createApp(options = {}) {
       platform: c.platform,
       version: c.version,
       wrapUrl: `/api/renders/${c.render_id}/wrap.png`,
-      widthMm: PRINT.widthMm,
-      heightMm: PRINT.heightMm,
+      widthMm: TRIM.width + bleed * 2,
+      heightMm: TRIM.height + bleed * 2,
     }));
     return sendJson(res, 200, {
       project: { id: project.id, name: project.name },
       paper: { size: "A4", orientation: "landscape", marginMm: 8, scale: 100 },
-      trimMm: { width: 270, height: 148 },
+      trimMm: { ...TRIM },
+      panelsMm: { back: CASE.panelW, spine: CASE.spine, front: CASE.panelW },
       bleedMm: bleed,
-      pageWidthMm: PRINT.widthMm,
-      pageHeightMm: PRINT.heightMm,
+      pageWidthMm: TRIM.width + bleed * 2,
+      pageHeightMm: TRIM.height + bleed * 2,
       pages,
       instructions:
-        "Print at 100% / Actual size on A4 landscape with no scaling, then measure 270 mm across the trim marks before cutting.",
+        "Print at 100% / Actual size on A4 landscape, do not fit to page. Check the 100 mm ruler, then measure 270 mm between the trim marks before cutting; fold at the two spine marks (128 mm and 142 mm from the left trim).",
     });
   }
 
@@ -930,7 +934,7 @@ export function createApp(options = {}) {
       render: render
         ? { id: render.id, version: render.version, wrapUrl: `/api/renders/${render.id}/wrap.png`, frontUrl: `/api/renders/${render.id}/front.png` }
         : null,
-      print: { trimMm: { width: 270, height: 148 }, bleedMm: bleed, dpi: 300 },
+      print: { trimMm: { ...TRIM }, bleedMm: bleed, dpi: 300 },
     });
   }
 
