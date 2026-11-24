@@ -13,18 +13,30 @@ import { nowIso } from "./db.mjs";
 
 const BACKOFF = [0, 2000, 8000];
 
-export function enqueueBuild(db, accountId, coverId) {
+/** Job kinds: "build" re-renders from the stored inputs (same art, same copy);
+ *  "variant" makes a new version — next-best art, other screenshots, fresh copy,
+ *  a new layout seed. */
+export const JOB_KINDS = new Set(["build", "variant"]);
+
+export function enqueueBuild(db, accountId, coverId, kind = "build") {
+  const wanted = JOB_KINDS.has(kind) ? kind : "build";
   const existing = db
-    .prepare("SELECT id FROM jobs WHERE cover_id = ? AND state IN ('queued','running')")
+    .prepare("SELECT id, state, kind FROM jobs WHERE cover_id = ? AND state IN ('queued','running')")
     .get(coverId);
-  if (existing) return existing.id;
+  if (existing) {
+    // A queued same-inputs job asked to become a variant is upgraded, not duplicated.
+    if (existing.state === "queued" && wanted === "variant" && existing.kind !== "variant") {
+      db.prepare("UPDATE jobs SET kind = 'variant', updated_at = ? WHERE id = ?").run(nowIso(), existing.id);
+    }
+    return existing.id;
+  }
 
   const id = crypto.randomUUID();
   const now = nowIso();
   db.prepare(
     `INSERT INTO jobs (id, account_id, kind, cover_id, state, attempts, max_attempts, run_after, created_at, updated_at)
-     VALUES (?, ?, 'build', ?, 'queued', 0, 3, ?, ?, ?)`
-  ).run(id, accountId, coverId, now, now, now);
+     VALUES (?, ?, ?, ?, 'queued', 0, 3, ?, ?, ?)`
+  ).run(id, accountId, wanted, coverId, now, now, now);
 
   // A hand approval is a decision, not a build state. Leaving it in place is
   // what lets the build recognise and restore it afterwards.

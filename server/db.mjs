@@ -129,9 +129,13 @@ CREATE INDEX IF NOT EXISTS usage_account ON usage_events(account_id, kind, creat
    covers.source  JSON — where the cover came from and which art was picked:
                   { rawgId, front: { url, source, kind, width, height } }.
    jobs.progress  JSON — the pipeline step list the run screen draws.
-   jobs.log       JSON — timestamped log lines for the run screen. */
+   jobs.log       JSON — timestamped log lines for the run screen.
+   covers.approved_render_id  the version a reviewer approved ('' = latest).
+   renders.meta   JSON — what went into this version (art, shots, seed, copy). */
 const MIGRATIONS = [
   ["covers", "source", "TEXT NOT NULL DEFAULT ''"],
+  ["covers", "approved_render_id", "TEXT NOT NULL DEFAULT ''"],
+  ["renders", "meta", "TEXT NOT NULL DEFAULT ''"],
   ["jobs", "progress", "TEXT NOT NULL DEFAULT ''"],
   ["jobs", "log", "TEXT NOT NULL DEFAULT ''"],
   ["jobs", "started_at", "TEXT NOT NULL DEFAULT ''"],

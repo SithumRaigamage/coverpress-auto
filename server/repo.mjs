@@ -188,13 +188,15 @@ export function setCoverOverrides(db, coverId, overrides) {
   );
 }
 
-export function setCoverDecision(db, accountId, coverId, decision) {
+/** Approve (a specific version, or the latest) or reject. */
+export function setCoverDecision(db, accountId, coverId, decision, renderId = "") {
   const cover = getCover(db, accountId, coverId);
   if (!cover) return null;
   if (decision !== "approved" && decision !== "rejected") throw new Error("Unknown decision.");
-  db.prepare("UPDATE covers SET status = ?, decided_at = ?, updated_at = ? WHERE id = ?").run(
+  db.prepare("UPDATE covers SET status = ?, decided_at = ?, approved_render_id = ?, updated_at = ? WHERE id = ?").run(
     decision,
     nowIso(),
+    decision === "approved" ? renderId || "" : "",
     nowIso(),
     coverId
   );
@@ -249,12 +251,41 @@ export function nextRenderVersion(db, coverId) {
   return Number(row.v) + 1;
 }
 
-export function addRender(db, coverId, { id = crypto.randomUUID(), wrapPath, frontPath, qc, cfg }) {
+export function addRender(db, coverId, { id = crypto.randomUUID(), wrapPath, frontPath, qc, cfg, meta = {} }) {
   const version = nextRenderVersion(db, coverId);
   db.prepare(
-    "INSERT INTO renders (id, cover_id, version, wrap_path, front_path, qc, cfg, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(id, coverId, version, wrapPath, frontPath, JSON.stringify(qc || {}), JSON.stringify(cfg || {}), nowIso());
+    "INSERT INTO renders (id, cover_id, version, wrap_path, front_path, qc, cfg, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(id, coverId, version, wrapPath, frontPath, JSON.stringify(qc || {}), JSON.stringify(cfg || {}), JSON.stringify(meta || {}), nowIso());
   return { id, version };
+}
+
+/** Every version of a cover, newest first, scoped through projects.account_id. */
+export function listVersions(db, accountId, coverId) {
+  return db
+    .prepare(
+      `SELECT r.id, r.version, r.qc, r.meta, r.created_at
+       FROM renders r JOIN covers c ON c.id = r.cover_id JOIN projects p ON p.id = c.project_id
+       WHERE r.cover_id = ? AND p.account_id = ?
+       ORDER BY r.version DESC`
+    )
+    .all(coverId, accountId);
+}
+
+/** Version summaries for every cover of an account (the review board), one query. */
+export function accountVersions(db, accountId) {
+  return db
+    .prepare(
+      `SELECT r.id, r.cover_id, r.version, r.qc, r.meta, r.created_at
+       FROM renders r JOIN covers c ON c.id = r.cover_id JOIN projects p ON p.id = c.project_id
+       WHERE p.account_id = ?
+       ORDER BY r.cover_id, r.version DESC`
+    )
+    .all(accountId);
+}
+
+/** Point a cover at the version a reviewer approved ('' clears it). */
+export function setApprovedRender(db, coverId, renderId) {
+  db.prepare("UPDATE covers SET approved_render_id = ?, updated_at = ? WHERE id = ?").run(renderId || "", nowIso(), coverId);
 }
 
 export function latestRender(db, coverId) {
@@ -279,24 +310,15 @@ export function approvedRenders(db, accountId, projectId) {
       `SELECT c.id AS cover_id, c.title, c.platform, c.status, r.id AS render_id, r.version
        FROM covers c
        JOIN projects p ON p.id = c.project_id
-       JOIN renders r ON r.id = (
-         SELECT id FROM renders WHERE cover_id = c.id ORDER BY version DESC LIMIT 1
+       JOIN renders r ON r.id = COALESCE(
+         NULLIF(c.approved_render_id, ''),
+         (SELECT id FROM renders WHERE cover_id = c.id ORDER BY version DESC LIMIT 1)
        )
        WHERE p.account_id = ? AND p.id = ?
          AND c.status IN ('approved','auto_approved')
        ORDER BY c.created_at`
     )
     .all(accountId, projectId);
-}
-
-/** Keep the newest N renders per cover and return the files that were dropped. */
-export function pruneRenders(db, coverId, keep = 5) {
-  const rows = db
-    .prepare("SELECT id, wrap_path, front_path FROM renders WHERE cover_id = ? ORDER BY version DESC")
-    .all(coverId);
-  const dropped = rows.slice(keep);
-  for (const row of dropped) db.prepare("DELETE FROM renders WHERE id = ?").run(row.id);
-  return dropped.map((r) => [r.wrap_path, r.front_path]);
 }
 
 /* ---------------------------------------------------------------- counts */
@@ -366,18 +388,43 @@ export function listAccountCovers(db, accountId, { projectId = null } = {}) {
     .all(accountId, projectId, projectId);
 }
 
-/** A cover in this project already made from this RAWG game, if any. */
-export function coverForRawg(db, accountId, projectId, rawgId) {
+/** The account's cover for this RAWG game on this platform, if any. One game +
+ *  platform is one cover; further runs are versions of it, not new covers. */
+export function coverForRawg(db, accountId, rawgId, platform) {
   return (
     db
       .prepare(
-        `SELECT c.id FROM covers c JOIN projects p ON p.id = c.project_id
-         WHERE p.account_id = ? AND p.id = ? AND json_valid(c.source) AND json_extract(c.source, '$.rawgId') = ?
+        `SELECT c.id, c.project_id FROM covers c JOIN projects p ON p.id = c.project_id
+         WHERE p.account_id = ? AND c.platform = ?
+           AND ((json_valid(c.source) AND json_extract(c.source, '$.rawgId') = ?)
+             OR (json_valid(c.meta) AND json_extract(c.meta, '$.id') = ?))
          ORDER BY c.created_at LIMIT 1`
       )
-      .get(accountId, projectId, Number(rawgId)) || null
+      .get(accountId, platform === "PS4" ? "PS4" : "PS5", Number(rawgId), Number(rawgId)) || null
   );
 }
+
+/** A title-only cover (pasted list) with the same normalised title and platform. */
+export function coverForTitle(db, accountId, title, platform) {
+  const key = normTitle(title);
+  return (
+    db
+      .prepare(
+        `SELECT c.id, c.title FROM covers c JOIN projects p ON p.id = c.project_id
+         WHERE p.account_id = ? AND c.platform = ?`
+      )
+      .all(accountId, platform === "PS4" ? "PS4" : "PS5")
+      .find((c) => normTitle(c.title) === key) || null
+  );
+}
+
+/** Title identity for de-duplication: case, punctuation and edition noise ignored. */
+export const normTitle = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/\(\d{4}\)/g, "")
+    .replace(/\b(standard|deluxe|ultimate|remastered|remake|collection|edition)\b/g, "")
+    .replace(/[^a-z0-9]/g, "");
 
 /** Recent jobs with their cover, scoped through projects.account_id. */
 export function recentRuns(db, accountId, limit = 30) {

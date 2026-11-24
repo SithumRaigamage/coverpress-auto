@@ -5,14 +5,16 @@
    poll always sees the step that is actually running — there is no in-memory
    state to lose on restart.
 
-   Seven steps, in the order the build performs them. Keys are stable API data;
-   labels are what the run screen prints. */
+   Eight steps, in the order the build performs them ("ai" is skipped unless AI
+   art is switched on in Settings). Keys are stable API data; labels are what the
+   run screen prints. */
 
 import { nowIso } from "./db.mjs";
 
 export const PIPELINE_STEPS = [
   { key: "metadata", label: "Fetch metadata" },
   { key: "collect", label: "Collect art" },
+  { key: "ai", label: "Generate AI art" },
   { key: "pick", label: "Pick front art" },
   { key: "copy", label: "Write back-cover copy" },
   { key: "render", label: "Render the wrap" },

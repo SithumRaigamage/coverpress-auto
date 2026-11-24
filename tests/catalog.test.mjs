@@ -214,21 +214,24 @@ test("Run all steps creates a cover with the picked art, layout and edited copy"
 
   const run = (await getJson(url, `/api/covers/${coverId}/run`)).body;
   assert.equal(run.run.state, "queued");
-  assert.equal(run.steps.length, 7);
-  assert.deepEqual(run.run.steps.map((s) => s.state), Array(7).fill("pending"));
+  assert.equal(run.steps.length, 8);
+  assert.deepEqual(run.run.steps.map((s) => s.state), Array(8).fill("pending"));
 });
 
-test("the worker reports all seven steps, and the run endpoint shows the render", async () => {
+const step = (run, key) => run.run.steps.find((s) => s.key === key);
+
+test("the worker reports every step, and the run endpoint shows the render", async () => {
   await server.app.worker.drain();
   const { body } = await getJson(url, `/api/covers/${coverId}/run`);
   assert.equal(body.run.state, "done", JSON.stringify(body.run));
   assert.deepEqual(
     body.run.steps.map((s) => s.key),
-    ["metadata", "collect", "pick", "copy", "render", "qc", "route"]
+    ["metadata", "collect", "ai", "pick", "copy", "render", "qc", "route"]
   );
-  for (const s of body.run.steps.slice(0, 5)) assert.ok(["done", "skipped"].includes(s.state), `${s.key}: ${s.state}`);
-  assert.match(body.run.steps[2].detail, /your pick/);
-  assert.match(body.run.steps[3].detail, /Saved copy/);
+  for (const s of body.run.steps.slice(0, 6)) assert.ok(["done", "skipped"].includes(s.state), `${s.key}: ${s.state}`);
+  assert.equal(step(body, "ai").state, "skipped", "AI art is off unless switched on in Settings");
+  assert.match(step(body, "pick").detail, /your pick/);
+  assert.match(step(body, "copy").detail, /Saved copy/);
   assert.ok(body.run.log.length >= 7);
   assert.ok(body.run.finishedAt);
   assert.ok(body.render.wrapUrl.endsWith("/wrap.png"));
@@ -240,9 +243,9 @@ test("the worker reports all seven steps, and the run endpoint shows the render"
   assert.equal(JSON.parse(cover.overrides).style, "minimal");
 });
 
-test("re-running the same game on the same shelf is free and reuses the cover", async () => {
+test("re-running the same game and platform is free and reuses the cover", async () => {
   const before = (await getJson(url, "/api/me")).body.account.usage.used;
-  const res = await post(url, "/api/games/42/covers", { platform: "PS5", style: "raw" });
+  const res = await post(url, "/api/games/42/covers", { platform: "PS4", style: "raw" });
   const body = await res.json();
   assert.equal(res.status, 200, JSON.stringify(body));
   assert.equal(body.created, false);
@@ -251,7 +254,7 @@ test("re-running the same game on the same shelf is free and reuses the cover", 
   await server.app.worker.drain();
   const run = (await getJson(url, `/api/covers/${coverId}/run`)).body;
   assert.equal(run.cover.style, "raw");
-  assert.match(run.run.steps[2].detail, /Keeping stored front art/, "a replay does not re-download art");
+  assert.match(step(run, "pick").detail, /Keeping stored front art/, "a same-art run does not re-download art");
 });
 
 test("library cards learn the cover's status and the cached art summary", async () => {
@@ -266,7 +269,7 @@ test("library cards learn the cover's status and the cached art summary", async 
 test("batch generation queues one cover per game and re-runs existing ones", async () => {
   const res = await post(url, "/api/covers/batch", {
     games: [
-      { rawgId: 42, name: "Test Quest", platform: "PS5" },
+      { rawgId: 42, name: "Test Quest", platform: "PS4" },
       { rawgId: 7, name: "Other Game", platform: "PS4" },
       { rawgId: "nope", name: "" },
     ],

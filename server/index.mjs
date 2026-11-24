@@ -28,6 +28,7 @@ import { createWorker, enqueueBuild, pendingJobs, latestJobForCover, activeJobs 
 import { llmConfig, llmOpts, publicLlmConfig } from "./llm.mjs";
 import { listModels, llmCopy, RAWG_ORDERING } from "../lib/sources.mjs";
 import { createCatalog } from "./catalog.mjs";
+import { mergeDuplicateCovers } from "./dedupe.mjs";
 import { PIPELINE_STEPS, jobRunDto, progressReporter } from "./progress.mjs";
 import { STYLES } from "../lib/cover.mjs";
 import { LEGAL } from "./legal.mjs";
@@ -95,6 +96,9 @@ export function createApp(options = {}) {
   const bleed = options.bleed ?? Number(process.env.BLEED_MM ?? 3);
   const legalContact = options.legalContact ?? process.env.LEGAL_CONTACT ?? "";
 
+  // One game + platform is one cover: fold duplicates left by earlier builds into versions.
+  mergeDuplicateCovers(db, logger);
+
   const initial = options.account || localAccount(db, options.localEmail || process.env.LOCAL_EMAIL);
   const initialId = initial.id;
 
@@ -133,6 +137,7 @@ export function createApp(options = {}) {
         bleed,
         reporter: progressReporter(db, job.id),
         attempt: job.attempts,
+        kind: job.kind,
         catalog,
         onRawgCall,
       }),
@@ -201,7 +206,28 @@ export function createApp(options = {}) {
         ? { source: source.front.source, kind: source.front.kind, width: source.front.width, height: source.front.height, fit: source.front.fit ?? null }
         : null,
       style: STYLES.has(overrides.style) ? overrides.style : "standard",
+      overrides: keptOverrides(overrides),
+      approvedRenderId: c.approved_render_id || null,
       updatedAt: c.updated_at || null,
+    };
+  };
+
+  /** One version of a cover for the review switcher. `cover` is the covers row. */
+  const versionDto = (r, cover) => {
+    const qc = parse(r.qc) || {};
+    const meta = parse(r.meta) || {};
+    return {
+      id: r.id,
+      version: r.version,
+      createdAt: r.created_at,
+      score: Number.isFinite(qc.score) ? qc.score : null,
+      status: qc.status || null,
+      issues: qc.issues || [],
+      mode: meta.mode || null,
+      front: meta.front ? { source: meta.front.source, kind: meta.front.kind, width: meta.front.width, height: meta.front.height } : null,
+      approved: Boolean(cover.approved_render_id) && cover.approved_render_id === r.id,
+      frontUrl: `/api/renders/${r.id}/front.png`,
+      wrapUrl: `/api/renders/${r.id}/wrap.png`,
     };
   };
 
@@ -257,6 +283,7 @@ export function createApp(options = {}) {
         "POST /api/covers/:id/render",
         "POST /api/covers/:id/decision",
         "POST /api/covers/:id/retry",
+        "GET /api/covers/:id/versions",
         "DELETE /api/covers/:id",
         "PUT /api/covers/:id/art/:slot",
         "GET /api/covers/:id/art/:slot",
@@ -339,13 +366,19 @@ export function createApp(options = {}) {
     let skipped = 0;
     let autoQueued = 0;
 
+    let duplicates = 0;
     for (const line of lines) {
+      const [title, platform, mode] = line.split("|").map((s) => s.trim());
+      if (!title) continue;
+      // One game + platform is one cover. A repeat is not a new cover (and costs no quota).
+      if (repo.coverForTitle(db, account().id, title, platform === "PS4" ? "PS4" : platform === "PS5" ? "PS5" : project.platform)) {
+        duplicates += 1;
+        continue;
+      }
       if (created.length >= room) {
         skipped += 1;
         continue;
       }
-      const [title, platform, mode] = line.split("|").map((s) => s.trim());
-      if (!title) continue;
       const cover = repo.createCover(db, account().id, project.id, {
         title,
         platform: platform || project.platform,
@@ -364,12 +397,14 @@ export function createApp(options = {}) {
       projectId: project.id,
       created,
       skipped,
+      duplicates,
       autoQueued,
       usage: usage(),
       message:
-        created.length || skipped
+        created.length || skipped || duplicates
           ? `${created.length} cover${created.length === 1 ? "" : "s"} added` +
             (autoQueued ? `, ${autoQueued} fetching metadata` : "") +
+            (duplicates ? `, ${duplicates} already on a shelf` : "") +
             (skipped ? `, ${skipped} held back by the ${plan.coversPerMonth}-cover limit` : "")
           : "No titles found in the request.",
     });
@@ -441,10 +476,15 @@ export function createApp(options = {}) {
     return sendJson(res, 200, { id: cover.id, overrides: keptOverrides(merged) });
   }
 
+  /** Replay. `mode: "variant"` (the UI default) makes a new version with the
+   *  next-best art, other screenshots, fresh copy and a new layout seed;
+   *  `mode: "same"` re-renders the stored inputs ("Run again with same art"). */
   async function buildCoverRoute(req, res, ctx) {
     const cover = await coverOr404(ctx.params.id);
-    const jobId = enqueueBuild(db, account().id, cover.id);
-    return sendJson(res, 202, { coverId: cover.id, jobId, pending: pendingJobs(db, account().id) });
+    const body = await readJson(req);
+    const mode = body.mode === "variant" ? "variant" : "same";
+    const jobId = enqueueBuild(db, account().id, cover.id, mode === "variant" ? "variant" : "build");
+    return sendJson(res, 202, { coverId: cover.id, jobId, mode, pending: pendingJobs(db, account().id) });
   }
 
   async function rerenderCover(req, res, ctx) {
@@ -467,17 +507,36 @@ export function createApp(options = {}) {
     if (body.overrides && typeof body.overrides === "object") {
       repo.setCoverOverrides(db, cover.id, keptOverrides({ ...repo.coverOverrides(cover), ...body.overrides }));
     }
-    const updated = repo.setCoverDecision(db, account().id, cover.id, decision);
+    // Any version can be approved; without renderId the latest is.
+    let renderId = "";
+    if (decision === "approved" && body.renderId) {
+      const v = repo.listVersions(db, account().id, cover.id).find((r) => r.id === String(body.renderId));
+      if (!v) throw new HttpError(400, "That version does not belong to this cover.");
+      renderId = v.id;
+    }
+    const updated = repo.setCoverDecision(db, account().id, cover.id, decision, renderId);
     if (!updated) throw new HttpError(400, "Decision must be approved or rejected.");
-    return sendJson(res, 200, { id: updated.id, status: updated.status, decidedAt: updated.decided_at });
+    return sendJson(res, 200, {
+      id: updated.id,
+      status: updated.status,
+      decidedAt: updated.decided_at,
+      approvedRenderId: updated.approved_render_id || null,
+    });
   }
 
-  /** Re-run the whole pipeline for a cover that is still unreviewed or failed:
-   *  re-fetch metadata/art, re-render, bump the version, and return to review. */
+  /** Every version of a cover, newest first, with QC and what went into it. */
+  async function listCoverVersions(req, res, ctx) {
+    const cover = await coverOr404(ctx.params.id);
+    const versions = repo.listVersions(db, account().id, cover.id).map((r) => versionDto(r, cover));
+    return sendJson(res, 200, { coverId: cover.id, approvedRenderId: cover.approved_render_id || null, versions });
+  }
+
+  /** "Run again": a new variant (next-best art, other shots, fresh copy, new
+   *  layout seed) that returns to review as a new version. Earlier versions stay. */
   async function retryCover(req, res, ctx) {
     const cover = await coverOr404(ctx.params.id);
-    if (!["needs_review", "failed", "rejected"].includes(cover.status)) {
-      throw new HttpError(400, "Only unreviewed, failed, or rejected covers can be rebuilt.");
+    if (["queued", "processing"].includes(cover.status)) {
+      throw new HttpError(409, "This cover is already building.");
     }
     // Send it back to review so the full pipeline runs again on the next build.
     repo.setCoverStatus(db, cover.id, "needs_review", { error: "", qc: null });
@@ -485,8 +544,8 @@ export function createApp(options = {}) {
       nowIso(),
       cover.id
     );
-    enqueueBuild(db, account().id, cover.id);
-    return sendJson(res, 202, { coverId: cover.id, jobId: null, pending: true });
+    const jobId = enqueueBuild(db, account().id, cover.id, "variant");
+    return sendJson(res, 202, { coverId: cover.id, jobId, mode: "variant", pending: true });
   }
 
   async function deleteCover(req, res, ctx) {
@@ -746,12 +805,12 @@ export function createApp(options = {}) {
     }
     const copy = body.copy ? cleanCopy(body.copy) : await catalog.cachedCopy(g.meta.id);
 
-    const existing = repo.coverForRawg(db, account().id, project.id, g.meta.id);
+    // One cover per game + platform across the account; another run is a new version of it.
+    const existing = repo.coverForRawg(db, account().id, g.meta.id, platform);
     let cover;
     if (existing) {
       // Same game, same shelf: re-run it with the new choices. Quota was charged at ingest.
       cover = repo.getCover(db, account().id, existing.id);
-      repo.setCoverPlatform(db, cover.id, platform);
     } else {
       if (coverRoom() < 1) {
         const plan = auth.planOf(account());
@@ -767,7 +826,7 @@ export function createApp(options = {}) {
     repo.setCoverOverrides(db, cover.id, keptOverrides({ ...repo.coverOverrides(cover), style }));
     const jobId = enqueueBuild(db, account().id, cover.id);
 
-    const fresh = repo.listAccountCovers(db, account().id, { projectId: project.id }).find((c) => c.id === cover.id);
+    const fresh = repo.listAccountCovers(db, account().id, { projectId: cover.project_id }).find((c) => c.id === cover.id);
     return sendJson(res, existing ? 200 : 201, {
       cover: coverDto(fresh),
       created: !existing,
@@ -792,9 +851,10 @@ export function createApp(options = {}) {
       const name = String(item?.name || "").trim().slice(0, 160);
       if (!Number.isInteger(rawgId) || rawgId <= 0 || !name) continue;
       const platform = item.platform === "PS4" ? "PS4" : "PS5";
-      const existing = repo.coverForRawg(db, account().id, project.id, rawgId);
+      const existing = repo.coverForRawg(db, account().id, rawgId, platform);
       if (existing) {
-        enqueueBuild(db, account().id, existing.id);
+        // Already a cover: generating it again means a new variant, not a duplicate.
+        enqueueBuild(db, account().id, existing.id, "variant");
         rerun.push(existing.id);
         continue;
       }
@@ -826,7 +886,15 @@ export function createApp(options = {}) {
   async function listCovers(req, res, ctx) {
     const projectId = ctx.query.get("projectId") || null;
     if (projectId) await projectOr404(projectId);
-    const covers = repo.listAccountCovers(db, account().id, { projectId }).map((c) => coverDto(c));
+    const byCover = new Map();
+    for (const r of repo.accountVersions(db, account().id)) {
+      if (!byCover.has(r.cover_id)) byCover.set(r.cover_id, []);
+      byCover.get(r.cover_id).push(r);
+    }
+    const covers = repo.listAccountCovers(db, account().id, { projectId }).map((c) => ({
+      ...coverDto(c),
+      versions: (byCover.get(c.id) || []).map((r) => versionDto(r, c)),
+    }));
     return sendJson(res, 200, { covers, pending: pendingJobs(db, account().id) });
   }
 
@@ -889,6 +957,7 @@ export function createApp(options = {}) {
     ["POST", /^\/api\/covers\/([^/]+)\/render$/, rerenderCover],
     ["POST", /^\/api\/covers\/([^/]+)\/decision$/, decideCover],
     ["POST", /^\/api\/covers\/([^/]+)\/retry$/, retryCover],
+    ["GET", /^\/api\/covers\/([^/]+)\/versions$/, listCoverVersions],
     ["DELETE", /^\/api\/covers\/([^/]+)$/, deleteCover],
     ["PUT", /^\/api\/covers\/([^/]+)\/art\/([^/]+)$/, uploadArt],
     ["GET", /^\/api\/covers\/([^/]+)\/art\/([^/]+)$/, getArt],
@@ -968,7 +1037,7 @@ export function createApp(options = {}) {
 /** Only the override keys the renderer reads ever reach the database. */
 function keptOverrides(raw) {
   const allowed = {};
-  for (const key of ["title", "titleSize", "titleAnchor", "titleAlign", "zoom", "offX", "offY", "ribbon", "subtitle", "style"]) {
+  for (const key of ["title", "titleSize", "titleAnchor", "titleAlign", "zoom", "offX", "offY", "ribbon", "subtitle", "style", "accent"]) {
     if (raw && raw[key] !== undefined) allowed[key] = raw[key];
   }
   return allowed;
