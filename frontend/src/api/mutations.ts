@@ -1,13 +1,41 @@
-/** Mutation hooks. All invalidation happens here so screens stay declarative. */
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+/** Mutation hooks. All invalidation and optimistic updates happen here so screens stay declarative. */
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import { qk } from './queries';
-import type { Layout, LlmSettings, Overrides, Platform } from './types';
+import type { CoverStatus, CoversResponse, CreateCoverInput, Platform } from './types';
+
+/** Everything a pipeline change can move: lists, counters, the library's status pills. */
+function invalidatePipeline(client: QueryClient, coverId?: string) {
+  void client.invalidateQueries({ queryKey: qk.coversAll });
+  void client.invalidateQueries({ queryKey: qk.runs });
+  void client.invalidateQueries({ queryKey: qk.libraryAll });
+  void client.invalidateQueries({ queryKey: qk.projects });
+  void client.invalidateQueries({ queryKey: qk.me });
+  if (coverId) {
+    void client.invalidateQueries({ queryKey: qk.run(coverId) });
+    void client.invalidateQueries({ queryKey: qk.cover(coverId) });
+  }
+}
+
+/** Set one cover's status in every cached cover list; returns a rollback. */
+function patchCoverStatus(client: QueryClient, coverId: string, status: CoverStatus) {
+  const snapshots = client.getQueriesData<CoversResponse>({ queryKey: qk.coversAll });
+  for (const [key, data] of snapshots) {
+    if (!data) continue;
+    client.setQueryData<CoversResponse>(key, {
+      ...data,
+      covers: data.covers.map((c) => (c.id === coverId ? { ...c, status } : c)),
+    });
+  }
+  return () => {
+    for (const [key, data] of snapshots) client.setQueryData(key, data);
+  };
+}
 
 export function useCreateProject() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name: string; platform: Platform; layout: Layout }) => api.createProject(input),
+    mutationFn: (input: { name: string; platform: Platform }) => api.createProject(input),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: qk.projects });
       void client.invalidateQueries({ queryKey: qk.me });
@@ -15,158 +43,79 @@ export function useCreateProject() {
   });
 }
 
-export function useImportTitles(projectId: string) {
+/** "Run all steps" / "Generate cover": create (or re-run) a cover and enqueue its build. */
+export function useCreateGameCover() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (titles: string) => api.importTitles(projectId, titles),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-      void client.invalidateQueries({ queryKey: qk.status(projectId) });
-      void client.invalidateQueries({ queryKey: qk.projects });
-      void client.invalidateQueries({ queryKey: qk.me });
-    },
+    mutationFn: ({ rawgId, input }: { rawgId: number | string; input: CreateCoverInput }) =>
+      api.createGameCover(rawgId, input),
+    onSuccess: (result) => invalidatePipeline(client, result.cover.id),
   });
 }
 
-export function useBuildProject(projectId: string) {
+export function useBatchCovers() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => api.buildProject(projectId),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: qk.status(projectId) });
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-    },
+    mutationFn: ({ games, projectId }: { games: Array<{ rawgId: number; name: string; platform: Platform }>; projectId?: string }) =>
+      api.batchCovers(games, projectId),
+    onSuccess: () => invalidatePipeline(client),
   });
 }
 
-export function useUpdateProject(projectId: string) {
+export function useDraftCopy(rawgId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input: {
-      accent?: string;
-      mark?: string;
-      edition?: string;
-      address?: string;
-      layout?: Layout;
-      platform?: Platform;
-    }) => api.patchProject(projectId, input),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-      void client.invalidateQueries({ queryKey: qk.projects });
-    },
+    mutationFn: (refresh: boolean = false) => api.draftCopy(rawgId, refresh),
+    onSuccess: () => void client.invalidateQueries({ queryKey: qk.game(rawgId) }),
   });
 }
 
-export function useUploadArt() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: ({ coverId, file }: { coverId: string; file: File }) => api.uploadArt(coverId, 'front', file),
-    onSuccess: (_result, { coverId }) => {
-      void client.invalidateQueries({ queryKey: qk.cover(coverId) });
-      void client.invalidateQueries({ queryKey: qk.projects });
-    },
-  });
-}
-
-export function usePatchOverrides(coverId: string, projectId: string) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (overrides: Overrides) => api.patchCover(coverId, overrides),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: qk.cover(coverId) });
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-    },
-  });
-}
-
-export function useBuildCover(projectId: string) {
+/** Replay: rebuild from stored metadata and art. Free of quota. */
+export function useReplay() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (coverId: string) => api.buildCover(coverId),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: qk.status(projectId) });
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-    },
+    onSuccess: (_r, coverId) => invalidatePipeline(client, coverId),
   });
 }
 
-export function useRenderCover(projectId: string) {
+/** Approve / reject, optimistic with rollback. */
+export function useDecision() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ coverId, overrides }: { coverId: string; overrides: Overrides }) =>
-      api.renderCover(coverId, overrides),
-    onSuccess: (_result, { coverId }) => {
-      void client.invalidateQueries({ queryKey: qk.cover(coverId) });
-      void client.invalidateQueries({ queryKey: qk.status(projectId) });
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
+    mutationFn: ({ coverId, decision }: { coverId: string; decision: 'approved' | 'rejected' }) =>
+      api.decideCover(coverId, decision),
+    onMutate: async ({ coverId, decision }) => {
+      await client.cancelQueries({ queryKey: qk.coversAll });
+      return { rollback: patchCoverStatus(client, coverId, decision) };
+    },
+    onError: (_e, _v, ctx) => ctx?.rollback(),
+    onSettled: (_r, _e, { coverId }) => {
+      invalidatePipeline(client, coverId);
+      void client.invalidateQueries({ queryKey: ['print'] });
     },
   });
 }
 
-export function useDecision(projectId: string) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      coverId,
-      decision,
-      overrides,
-    }: {
-      coverId: string;
-      decision: 'approved' | 'rejected';
-      overrides?: Overrides;
-    }) => api.decideCover(coverId, decision, overrides),
-    onSuccess: (_result, { coverId }) => {
-      void client.invalidateQueries({ queryKey: qk.cover(coverId) });
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-      void client.invalidateQueries({ queryKey: qk.projects });
-      void client.invalidateQueries({ queryKey: qk.print(projectId) });
-    },
-  });
-}
-
-export function useRetryCover(projectId: string) {
+/** Run again / Retry all steps, optimistic with rollback. */
+export function useRetry() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (coverId: string) => api.retryCover(coverId),
-    onSuccess: (_result, coverId) => {
-      void client.invalidateQueries({ queryKey: qk.cover(coverId) });
-      void client.invalidateQueries({ queryKey: qk.status(projectId) });
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-      void client.invalidateQueries({ queryKey: qk.projects });
+    onMutate: async (coverId) => {
+      await client.cancelQueries({ queryKey: qk.coversAll });
+      return { rollback: patchCoverStatus(client, coverId, 'queued') };
     },
+    onError: (_e, _v, ctx) => ctx?.rollback(),
+    onSettled: (_r, _e, coverId) => invalidatePipeline(client, coverId),
   });
 }
 
-export function useRawgSearch() {
-  return useMutation({
-    mutationFn: ({ q, platform }: { q: string; platform?: string }) => api.rawgSearch(q, platform),
-  });
-}
-
-export function useDeleteCover(projectId: string) {
+/** The hidden override in review: replace the front art with a file. */
+export function useUploadFront() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (coverId: string) => api.deleteCover(coverId),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: qk.project(projectId) });
-      void client.invalidateQueries({ queryKey: qk.projects });
-      void client.invalidateQueries({ queryKey: qk.print(projectId) });
-    },
-  });
-}
-
-export function useSetKey() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: ({ name, value }: { name: 'rawg' | 'openrouter'; value: string }) => api.putKey(name, value),
-    onSuccess: () => void client.invalidateQueries({ queryKey: qk.settings }),
-  });
-}
-
-export function useSaveLlm() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (input: LlmSettings) => api.saveLlm(input),
-    onSuccess: () => void client.invalidateQueries({ queryKey: qk.llm }),
+    mutationFn: ({ coverId, file }: { coverId: string; file: File }) => api.uploadArt(coverId, 'front', file),
+    onSuccess: (_r, { coverId }) => invalidatePipeline(client, coverId),
   });
 }

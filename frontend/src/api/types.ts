@@ -24,6 +24,8 @@ export interface Usage {
   limit: number;
   projects: number;
   projectLimit: number;
+  /** RAWG requests made by the server this month, against the 20k free tier. */
+  rawg?: { used: number; limit: number };
 }
 
 export interface Account {
@@ -73,7 +75,14 @@ export interface Cover {
   artUrl: string | null;
   thumbUrl: string | null;
   wrapUrl: string | null;
+  projectName?: string | null;
+  rawgId?: number | null;
+  front?: { source: string; kind: string; width: number; height: number; fit: number | null } | null;
+  style?: CoverStyle;
+  updatedAt?: string | null;
 }
+
+export type CoverStyle = 'standard' | 'minimal' | 'raw';
 
 export interface StatusCover {
   id: string;
@@ -105,6 +114,7 @@ export interface Overrides {
   offY?: number;
   ribbon?: string;
   subtitle?: string;
+  style?: CoverStyle;
 }
 
 export interface CoverDetail {
@@ -135,7 +145,8 @@ export interface PrintPlan {
 
 export interface Settings {
   account: Account;
-  keys: { rawg: boolean; openrouter: boolean };
+  keys: { rawg: boolean; openrouter: boolean; sgdb: boolean };
+  restrictions: Array<{ name: string; reason: string }>;
   unsupported: Array<{ name: string; reason: string }>;
   storage: { dataDir: string; database: string };
 }
@@ -144,6 +155,7 @@ export interface LlmSettings {
   provider: 'ollama' | 'openrouter';
   ollama: { host: string; textModel: string; visionModel: string };
   openrouter: { textModel: string; visionModel: string; configured?: boolean };
+  status?: { connected: boolean; detail: string; checkedAt: string };
 }
 
 export interface LegalSection {
@@ -192,13 +204,182 @@ export interface ProjectDetailResponse {
   pending: number;
 }
 
+export interface CoverRef {
+  id: string;
+  status: CoverStatus;
+  thumbUrl: string | null;
+  renderVersion: number | null;
+  projectId: string;
+}
+
 export interface RawgGame {
   id: number;
   slug: string;
   name: string;
   released: string | null;
+  year: number | null;
+  genres: string[];
   rating: string | null;
   metacritic: number | null;
   backgroundImage: string | null;
   platforms: string[];
+  screenshotCount: number;
+  cover: CoverRef | null;
+  /** From the server's disk cache; null until the game has been opened once. */
+  art: { rawg: number; sgdb: number; printReady: boolean } | null;
+}
+
+export interface RawgSearchPage {
+  games: RawgGame[];
+  count: number;
+  page: number;
+  next: boolean;
+  total: number;
+}
+
+export interface LibraryFilters {
+  q: string;
+  platform: '' | Platform;
+  genre: string;
+  year: string;
+  ordering: string;
+}
+
+export interface GameDetail {
+  id: number;
+  slug: string;
+  name: string;
+  released: string | null;
+  year: number | null;
+  developer: string;
+  publisher: string;
+  genres: string[];
+  rating: string;
+  metacritic: number | null;
+  description: string;
+  platforms: string[];
+}
+
+export interface BackCopy {
+  tagline: string;
+  blurb: string;
+  features: string[];
+  /** 'rawg' = deterministic fallback; otherwise the model provider that drafted it. */
+  source?: string;
+}
+
+export interface GameResponse {
+  game: GameDetail;
+  copy: BackCopy;
+  covers: Cover[];
+}
+
+export interface ArtItem {
+  id: string;
+  source: 'RAWG' | 'SteamGridDB';
+  kind: string;
+  url: string;
+  thumb: string;
+  width: number;
+  height: number;
+  fit: number;
+  printReady: boolean;
+}
+
+export interface GameArt {
+  items: ArtItem[];
+  best: string | null;
+  counts: { all: number; rawg: number; sgdb: number };
+  sgdb: { enabled: boolean; error: string | null };
+  panel: { widthPx: number; heightPx: number; widthMm: number; heightMm: number; dpi: number };
+}
+
+export interface CreateCoverInput {
+  platform: Platform;
+  style: CoverStyle;
+  artId?: string | null;
+  copy?: BackCopy;
+  projectId?: string;
+}
+
+export interface CreateCoverResult {
+  cover: Cover;
+  created: boolean;
+  jobId: string;
+  runUrl: string;
+  usage: Usage;
+}
+
+export interface BatchResult {
+  projectId: string;
+  created: string[];
+  rerun: string[];
+  skipped: number;
+  usage: Usage;
+  message: string;
+}
+
+export type StepState = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+
+export interface RunStep {
+  key: string;
+  label: string;
+  state: StepState;
+  detail: string;
+}
+
+export interface LogLine {
+  t: string;
+  level: 'info' | 'ok' | 'warn' | 'error';
+  msg: string;
+}
+
+export interface JobRun {
+  id: string;
+  state: 'queued' | 'running' | 'done' | 'failed';
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  step: number;
+  totalSteps: number;
+  steps: RunStep[];
+  log: LogLine[];
+}
+
+export interface CoverRun {
+  cover: Cover;
+  run: JobRun | null;
+  steps: Array<{ key: string; label: string }>;
+  qc: QcReport | null;
+  render: { id: string; version: number; wrapUrl: string; frontUrl: string } | null;
+  print: { trimMm: { width: number; height: number }; bleedMm: number; dpi: number };
+}
+
+export interface RunSummary {
+  id: string;
+  coverId: string;
+  projectId: string;
+  title: string;
+  platform: Platform;
+  coverStatus: CoverStatus;
+  state: JobRun['state'];
+  step: number;
+  totalSteps: number;
+  currentLabel: string | null;
+  lastError: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export interface RunsResponse {
+  active: number;
+  runs: RunSummary[];
+}
+
+export interface CoversResponse {
+  covers: Cover[];
+  pending: number;
 }

@@ -1,11 +1,21 @@
 /** The only module allowed to call fetch. */
 import type {
+  Account,
   ArtUploadResult,
+  BackCopy,
+  BatchResult,
   CoverDetail,
+  CoverRun,
+  CoversResponse,
   CoverStatus,
+  CreateCoverInput,
+  CreateCoverResult,
+  GameArt,
+  GameResponse,
   ImportResult,
-  LlmSettings,
   LegalDoc,
+  LibraryFilters,
+  LlmSettings,
   Overrides,
   Platform,
   Layout,
@@ -14,9 +24,9 @@ import type {
   ProjectDetailResponse,
   ProjectListResponse,
   ProjectStatus,
-  RawgGame,
+  RawgSearchPage,
+  RunsResponse,
   Settings,
-  Account,
 } from './types';
 
 export class ApiError extends Error {
@@ -58,8 +68,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
-const segment = (value: string) => encodeURIComponent(value);
+const segment = (value: string | number) => encodeURIComponent(String(value));
 const body = (value: unknown) => JSON.stringify(value);
+
+function query(params: Record<string, string | number | undefined>) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') q.set(k, String(v));
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
 
 export const api = {
   health: () => request<{ ok: true }>('/health'),
@@ -67,30 +84,33 @@ export const api = {
   legal: () => request<LegalDoc>('/legal'),
 
   projects: () => request<ProjectListResponse>('/projects'),
-  createProject: (input: { name: string; platform: Platform; layout: Layout }) =>
+  createProject: (input: { name: string; platform: Platform; layout?: Layout }) =>
     request<{ project: Project }>('/projects', { method: 'POST', body: body(input) }),
   project: (id: string) => request<ProjectDetailResponse>(`/projects/${segment(id)}`),
-  patchProject: (
-    id: string,
-    input: { accent?: string; mark?: string; edition?: string; address?: string; layout?: Layout; platform?: Platform },
-  ) => request<{ project: Project }>(`/projects/${segment(id)}`, { method: 'PATCH', body: body(input) }),
   importTitles: (id: string, titles: string) =>
     request<ImportResult>(`/projects/${segment(id)}/import`, { method: 'POST', body: body({ titles }) }),
-  buildProject: (id: string) =>
-    request<{ queued: number; pending: number }>(`/projects/${segment(id)}/build`, {
-      method: 'POST',
-      body: body({}),
-    }),
   projectStatus: (id: string) => request<ProjectStatus>(`/projects/${segment(id)}/status`),
   printPlan: (id: string) => request<PrintPlan>(`/projects/${segment(id)}/print`),
 
+  /* Library and games */
+  rawgSearch: (filters: LibraryFilters, page = 1) =>
+    request<RawgSearchPage>(
+      `/rawg/search${query({ q: filters.q, platform: filters.platform, genre: filters.genre, year: filters.year, ordering: filters.ordering, page })}`,
+    ),
+  game: (rawgId: number | string) => request<GameResponse>(`/games/${segment(rawgId)}`),
+  gameArt: (rawgId: number | string) => request<GameArt>(`/games/${segment(rawgId)}/art`),
+  draftCopy: (rawgId: number | string, refresh = false) =>
+    request<BackCopy>(`/games/${segment(rawgId)}/copy`, { method: 'POST', body: body({ refresh }) }),
+  createGameCover: (rawgId: number | string, input: CreateCoverInput) =>
+    request<CreateCoverResult>(`/games/${segment(rawgId)}/covers`, { method: 'POST', body: body(input) }),
+  batchCovers: (games: Array<{ rawgId: number; name: string; platform: Platform }>, projectId?: string) =>
+    request<BatchResult>('/covers/batch', { method: 'POST', body: body({ games, projectId }) }),
+
+  /* Covers and runs */
+  covers: (projectId?: string) => request<CoversResponse>(`/covers${query({ projectId })}`),
   cover: (id: string) => request<CoverDetail>(`/covers/${segment(id)}`),
-  /** Persist overrides without enqueueing a render. */
-  patchCover: (id: string, overrides: Overrides) =>
-    request<{ id: string; overrides: Overrides }>(`/covers/${segment(id)}`, {
-      method: 'PATCH',
-      body: body({ overrides }),
-    }),
+  coverRun: (id: string) => request<CoverRun>(`/covers/${segment(id)}/run`),
+  runs: () => request<RunsResponse>('/runs'),
   buildCover: (id: string) =>
     request<{ coverId: string; jobId: string; pending: number }>(`/covers/${segment(id)}/build`, {
       method: 'POST',
@@ -112,13 +132,9 @@ export const api = {
       method: 'POST',
       body: body({}),
     }),
-  /** Search RAWG games using the account's stored RAWG key. */
-  rawgSearch: (q: string, platform?: string) =>
-    request<{ games: RawgGame[]; count: number }>(
-      `/rawg/search?q=${encodeURIComponent(q)}${platform ? `&platform=${encodeURIComponent(platform)}` : ''}`,
-    ),
   deleteCover: (id: string) =>
     request<{ deleted: string; projectId: string }>(`/covers/${segment(id)}`, { method: 'DELETE' }),
+  /** Hidden override only (review board). The main flow never uploads. */
   uploadArt: (id: string, slot: string, file: File) =>
     request<ArtUploadResult>(`/covers/${segment(id)}/art/${segment(slot)}`, {
       method: 'PUT',
@@ -127,45 +143,9 @@ export const api = {
     }),
 
   settings: () => request<Settings>('/settings'),
-  putKey: (name: 'rawg' | 'openrouter', value: string) =>
-    request<{ keys: Settings['keys'] }>('/settings/keys', {
-      method: 'PUT',
-      body: body({ name, value }),
-    }),
-  /** Optional in the current API build: 404 is a normal answer. */
-  llm: async (): Promise<LlmSettings | null> => {
-    try {
-      return await request<LlmSettings>('/settings/llm');
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 404) return null;
-      throw error;
-    }
-  },
-  saveLlm: (input: LlmSettings) =>
-    request<LlmSettings>('/settings/llm', { method: 'PUT', body: body(input) }),
-  llmModels: async (): Promise<string[] | null> => {
-    try {
-      const data: unknown = await request<unknown>('/settings/models');
-      const source = Array.isArray(data)
-        ? data
-        : data && typeof data === 'object' && 'models' in data && Array.isArray(data.models)
-          ? data.models
-          : [];
-      return source.filter((item): item is string => typeof item === 'string');
-    } catch {
-      return null;
-    }
-  },
+  llm: () => request<LlmSettings>('/settings/llm'),
 };
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong.';
-}
-
-export function asString(value: unknown, fallback = ''): string {
-  return typeof value === 'string' ? value : fallback;
-}
-
-export function asNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }

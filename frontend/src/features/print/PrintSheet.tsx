@@ -1,94 +1,53 @@
-import { Link, useParams } from 'react-router';
-import { Check, FileWarning, Printer } from 'lucide-react';
+/** One shelf's print sheet: 276 × 154 mm pages (270 × 148 mm trim + 3 mm bleed), printed at 100%. */
+import { useParams } from 'react-router';
+import { Printer } from 'lucide-react';
 import { errorMessage } from '../../api/client';
-import { usePrintPlan, useProject } from '../../api/queries';
-import { Button, Chip, EmptyState, ErrorPanel, Skeleton } from '../../components/ui';
+import { usePrintPlan } from '../../api/queries';
+import { Button, ButtonLink, EmptyState, ErrorPanel, PageHeader, Skeleton } from '../../components/ui';
 
 export function PrintSheet() {
-  const { id = '' } = useParams();
-  const projectQuery = useProject(id);
-  const planQuery = usePrintPlan(id);
+  const { projectId = '' } = useParams();
+  const plan = usePrintPlan(projectId);
 
-  if (projectQuery.isPending || planQuery.isPending) {
-    return (
-      <div className="screen">
-        <Skeleton className="skeleton--title" />
-        <Skeleton className="skeleton--sheet" />
-      </div>
-    );
-  }
-  if (planQuery.isError || !planQuery.data) {
-    return (
-      <div className="screen">
-        <ErrorPanel message={errorMessage(planQuery.error)} onRetry={() => void planQuery.refetch()} />
-      </div>
-    );
-  }
-
-  const plan = planQuery.data;
+  if (plan.isError) return <ErrorPanel message={errorMessage(plan.error)} onRetry={() => void plan.refetch()} />;
+  if (!plan.data) return <Skeleton className="h-96" />;
+  const { pages, project, pageWidthMm, pageHeightMm, instructions } = plan.data;
 
   return (
-    <div className="screen print-screen">
-      <nav className="breadcrumb" aria-label="Breadcrumb">
-        <Link to="/">Shelves</Link> / <Link to={`/shelves/${id}`}>{projectQuery.data?.project.name ?? 'Shelf'}</Link> / <span>Print</span>
-      </nav>
-
-      <header className="screen-header">
-        <div>
-          <p className="eyebrow">Print workshop</p>
-          <h1>Print sheet</h1>
-          <div className="chip-row">
-            <Chip tone="accent">A4 landscape</Chip>
-            <Chip><span className="mono">{plan.paper.scale}% scale</span></Chip>
-            <Chip>{plan.pages.length} approved page{plan.pages.length === 1 ? '' : 's'}</Chip>
-          </div>
-        </div>
-        <div className="screen-header__actions">
-          <Link className="btn btn--secondary btn--md" to={`/shelves/${id}/review`}>Back to review</Link>
-          <Button variant="primary" icon={<Printer size={16} />} disabled={plan.pages.length === 0} onClick={() => window.print()}>
-            Print sheet
-          </Button>
-        </div>
-      </header>
-
-      {plan.pages.length === 0 ? (
-        <EmptyState
-          icon={<FileWarning size={22} />}
-          title="Nothing approved yet"
-          body="Approving a cover in review means you are happy with the wrap. Approved covers appear here as real-size sheets, one per page."
-          action={<Link className="btn btn--primary btn--md" to={`/shelves/${id}/review`}>Go to review</Link>}
+    <div className="mx-auto flex max-w-[1200px] flex-col gap-6">
+      <div className="no-print flex flex-col gap-4">
+        <PageHeader
+          title={`Print sheet · ${project.name}`}
+          subtitle={`${pages.length} page${pages.length === 1 ? '' : 's'}, ${pageWidthMm} × ${pageHeightMm} mm each.`}
+          actions={
+            <Button variant="primary" icon={<Printer size={16} aria-hidden />} disabled={!pages.length} onClick={() => window.print()}>
+              Print {pages.length ? `(${pages.length})` : ''}
+            </Button>
+          }
         />
-      ) : (
-        <>
-          <section className="panel print-checklist" aria-label="Print checklist">
-            <h2>Before you print</h2>
-            <p>{plan.instructions}</p>
-            <ul className="checklist">
-              <li><Check size={14} /> Print at 100% / Actual size</li>
-              <li><Check size={14} /> No scaling or “fit to page”</li>
-              <li><Check size={14} /> Measure {plan.trimMm.width} mm across the trim marks</li>
-              <li><Check size={14} /> {plan.bleedMm} mm bleed on every side</li>
-            </ul>
-          </section>
+        <ul className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted" aria-label="Before you print">
+          <li>Print at 100% / Actual size</li>
+          <li>No scaling, no “fit to page”</li>
+          <li>Measure 270 mm across the trim marks</li>
+        </ul>
+        <p className="text-xs text-faint">{instructions}</p>
+      </div>
 
-          <div className="sheet-list">
-            {plan.pages.map((page, index) => (
-              <article className="sheet-item" key={page.coverId}>
-                <div className="sheet-item__label">
-                  <span className="mono">Page {index + 1}</span>
-                  <strong>{page.title}</strong>
-                  <span className="subtle mono">{page.platform} · {page.version ? `v${page.version}` : 'latest'} · {page.widthMm} mm</span>
-                </div>
-                <div className="print-page">
-                  <img src={page.wrapUrl} alt={`Print-ready wrap for ${page.title}`} />
-                  <div className="print-page__trim" aria-hidden="true">
-                    <span className="mono">{plan.trimMm.width} × {plan.trimMm.height} mm trim</span>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        </>
+      {pages.length === 0 ? (
+        <EmptyState title="No approved covers on this shelf" action={<ButtonLink variant="primary" to={`/review?shelf=${project.id}`}>Open review</ButtonLink>}>
+          Approving a cover in review (or letting it auto-approve) puts it on this sheet.
+        </EmptyState>
+      ) : (
+        <div className="flex flex-col items-center gap-6 overflow-x-auto">
+          {pages.map((p) => (
+            <figure key={p.coverId} className="print-page shrink-0 bg-white" style={{ width: `${pageWidthMm}mm`, height: `${pageHeightMm}mm` }}>
+              <img src={p.wrapUrl} alt={`Print wrap for ${p.title}, ${p.platform}, version ${p.version}`} style={{ width: `${pageWidthMm}mm`, height: `${pageHeightMm}mm` }} />
+              <figcaption className="no-print mt-2 text-xs text-muted">
+                {p.title} · {p.platform} · v{p.version}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
       )}
     </div>
   );

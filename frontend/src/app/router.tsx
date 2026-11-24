@@ -1,35 +1,36 @@
 import { lazy, Suspense, type ReactNode } from 'react';
-import { createBrowserRouter, Link, useRouteError } from 'react-router';
+import { createBrowserRouter, useRouteError } from 'react-router';
 import { errorMessage } from '../api/client';
-import { ErrorPanel, Skeleton } from '../components/ui';
-import { Shelves } from '../features/shelves/Shelves';
+import { ButtonLink, EmptyState, ErrorPanel, Skeleton } from '../components/ui';
+import { Library } from '../features/library/Library';
 import { Shell } from './shell';
 
-// Keep the first paint to the shelves shell. Other screens bring their own
-// heavier form/primitive dependencies only when opened.
-const Shelf = lazy(() => import('../features/shelves/Shelf').then((module) => ({ default: module.Shelf })));
-const Review = lazy(() => import('../features/review/Review').then((module) => ({ default: module.Review })));
-const PrintSheet = lazy(() => import('../features/print/PrintSheet').then((module) => ({ default: module.PrintSheet })));
-const Settings = lazy(() => import('../features/settings/Settings').then((module) => ({ default: module.Settings })));
-const Legal = lazy(() => import('../features/legal/Legal').then((module) => ({ default: module.Legal })));
+// The library is the first paint; every other screen loads on demand.
+const GameDetail = lazy(() => import('../features/games/GameDetail').then((m) => ({ default: m.GameDetail })));
+const RunScreen = lazy(() => import('../features/runs/RunScreen').then((m) => ({ default: m.RunScreen })));
+const RunsList = lazy(() => import('../features/runs/RunsList').then((m) => ({ default: m.RunsList })));
+const ReviewBoard = lazy(() => import('../features/review/ReviewBoard').then((m) => ({ default: m.ReviewBoard })));
+const Shelves = lazy(() => import('../features/shelves/Shelves').then((m) => ({ default: m.Shelves })));
+const PrintSheets = lazy(() => import('../features/print/PrintSheets').then((m) => ({ default: m.PrintSheets })));
+const PrintSheet = lazy(() => import('../features/print/PrintSheet').then((m) => ({ default: m.PrintSheet })));
+const Settings = lazy(() => import('../features/settings/Settings').then((m) => ({ default: m.Settings })));
+const Legal = lazy(() => import('../features/legal/Legal').then((m) => ({ default: m.Legal })));
 
 function Loading() {
   return (
-    <div className="screen" aria-busy="true" aria-label="Loading">
-      <Skeleton className="skeleton--title" />
-      <Skeleton className="skeleton--panel" />
+    <div className="mx-auto flex max-w-[1400px] flex-col gap-4" aria-busy="true" aria-label="Loading">
+      <Skeleton className="h-8 w-1/3" />
+      <Skeleton className="h-64" />
     </div>
   );
 }
 
-function deferred(element: ReactNode) {
-  return <Suspense fallback={<Loading />}>{element}</Suspense>;
-}
+const deferred = (element: ReactNode) => <Suspense fallback={<Loading />}>{element}</Suspense>;
 
 function RouteError() {
   const error = useRouteError();
   return (
-    <div className="screen">
+    <div className="p-8">
       <ErrorPanel message={errorMessage(error)} onRetry={() => window.location.assign('/')} />
     </div>
   );
@@ -37,30 +38,31 @@ function RouteError() {
 
 function NotFound() {
   return (
-    <div className="screen">
-      <div className="empty-state">
-        <h3>Page not found</h3>
-        <p>That route doesn't exist in the local workbench.</p>
-        <Link className="btn btn--primary btn--md" to="/">Back to shelves</Link>
-      </div>
-    </div>
+    <EmptyState title="Page not found" action={<ButtonLink variant="primary" to="/">Back to the library</ButtonLink>}>
+      That address is not part of Coverpress.
+    </EmptyState>
   );
 }
 
-/** React Router 7 data mode. The URL is the source of truth for shelf + cover selection. */
-export const router = createBrowserRouter([
+export const routes = [
   {
     path: '/',
     element: <Shell />,
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <Shelves /> },
-      { path: 'shelves/:id', element: deferred(<Shelf />) },
-      { path: 'shelves/:id/review', element: deferred(<Review />) },
-      { path: 'shelves/:id/print', element: deferred(<PrintSheet />) },
+      { index: true, element: <Library /> },
+      { path: 'games/:rawgId', element: deferred(<GameDetail />) },
+      { path: 'runs', element: deferred(<RunsList />) },
+      { path: 'runs/:coverId', element: deferred(<RunScreen />) },
+      { path: 'review', element: deferred(<ReviewBoard />) },
+      { path: 'shelves', element: deferred(<Shelves />) },
+      { path: 'print', element: deferred(<PrintSheets />) },
+      { path: 'print/:projectId', element: deferred(<PrintSheet />) },
       { path: 'settings', element: deferred(<Settings />) },
       { path: 'legal', element: deferred(<Legal />) },
       { path: '*', element: <NotFound /> },
     ],
   },
-]);
+];
+
+export const router = createBrowserRouter(routes);

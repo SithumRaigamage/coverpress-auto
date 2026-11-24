@@ -1,189 +1,108 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { useForm } from 'react-hook-form';
-import { useNavigate } from 'react-router';
-import { CircleCheck, FolderOpen, Layers3, Plus, ShieldAlert, ScanEye } from 'lucide-react';
+/** My shelves — each shelf with a mosaic of its latest covers, counts and shortcuts. */
+import { useState } from 'react';
+import { Link } from 'react-router';
+import { Plus } from 'lucide-react';
 import { ApiError, errorMessage } from '../../api/client';
 import { useCreateProject } from '../../api/mutations';
-import { useMe, useProjects, useShelfStatuses } from '../../api/queries';
-import { Button, Chip, EmptyState, ErrorPanel, SkeletonCards } from '../../components/ui';
+import { useProjects } from '../../api/queries';
+import type { Platform } from '../../api/types';
+import { Button, ButtonLink, Card, EmptyState, ErrorPanel, PageHeader, Segmented, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
-import type { ProjectStatus } from '../../api/types';
-import { newShelfSchema, type NewShelfValues } from '../../lib/schemas';
-import { ShelfCard } from './ShelfCard';
 
 export function Shelves() {
-  const projectsQuery = useProjects();
-  const meQuery = useMe();
-  const projects = projectsQuery.data?.projects ?? [];
-  const statuses = useShelfStatuses(projects);
-  const statusList = statuses.map((query) => query.data).filter((data): data is ProjectStatus => Boolean(data));
-
-  const stats = useMemo(() => {
-    if (statusList.length) {
-      return {
-        covers: statusList.reduce((sum, item) => sum + item.covers.length, 0),
-        ready: statusList.reduce(
-          (sum, item) => sum + item.covers.filter((c) => c.status === 'approved' || c.status === 'auto_approved').length,
-          0,
-        ),
-        review: statusList.reduce((sum, item) => sum + item.covers.filter((c) => c.status === 'needs_review').length, 0),
-        failed: statusList.reduce((sum, item) => sum + item.covers.filter((c) => c.status === 'failed').length, 0),
-      };
-    }
-    return {
-      covers: projects.reduce((sum, project) => sum + (project.coverCount ?? 0), 0),
-      ready: projects.reduce((sum, project) => sum + (project.readyCount ?? 0), 0),
-      review: 0,
-      failed: 0,
-    };
-  }, [projects, statusList]);
-
-  return (
-    <div className="screen">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">Local workshop · personal use only</p>
-          <h1>Shelves</h1>
-          <p className="hero__lead">
-            Gather titles, shape each insert, then print a case that fits. Every cover is a personal-use item —
-            not official, not for sale.
-          </p>
-        </div>
-        <div className="hero__case" aria-hidden="true">
-          <div className="hero__case-band" />
-          <div className="hero__case-art" />
-          <div className="hero__case-foot">PERSONAL EDITION</div>
-        </div>
-      </header>
-
-      <section className="stats" aria-label="Workbench summary">
-        <Stat label="Total covers" value={stats.covers} hint="Across every shelf" icon={<Layers3 size={18} />} />
-        <Stat label="Ready" value={stats.ready} hint="Approved or auto-approved" icon={<CircleCheck size={18} />} />
-        <Stat label="Needs review" value={stats.review} hint="Waiting on your eye" icon={<ScanEye size={18} />} />
-        <Stat label="Failed" value={stats.failed} hint="Needs art or a rebuild" icon={<ShieldAlert size={18} />} />
-      </section>
-
-      <InlineNewShelf expandedByDefault={projects.length <= 6} />
-
-      <div className="section-heading">
-        <div>
-          <h2>Your shelves</h2>
-          <p>{projects.length ? `${projects.length} in this workspace` : 'Nothing here yet'}</p>
-        </div>
-        {meQuery.data?.account.plan && <Chip tone="accent">{meQuery.data.account.plan.label} plan</Chip>}
-      </div>
-
-      {projectsQuery.isPending ? (
-        <SkeletonCards count={3} />
-      ) : projectsQuery.isError ? (
-        <ErrorPanel message={errorMessage(projectsQuery.error)} onRetry={() => void projectsQuery.refetch()} />
-      ) : projects.length === 0 ? (
-        <EmptyState
-          icon={<FolderOpen size={22} />}
-          title="Start with a shelf"
-          body="A shelf holds the covers for one platform. Add it, paste your titles, then drop in your own artwork."
-        />
-      ) : (
-        <div className="project-grid">
-          {projects.map((project) => <ShelfCard project={project} key={project.id} />)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Stat({ label, value, hint, icon }: { label: string; value: number; hint: string; icon: ReactNode }) {
-  return (
-    <div className="stat-card">
-      <div style={{ color: 'var(--accent)' }}>{icon}</div>
-      <div>
-        <span className="stat-card__label">{label}</span>
-        <strong className="stat-card__value mono">{value}</strong>
-        <span className="stat-card__hint">{hint}</span>
-      </div>
-    </div>
-  );
-}
-
-/** Inline by design: creating a shelf is a single line, not a modal. */
-function InlineNewShelf({ expandedByDefault }: { expandedByDefault: boolean }) {
-  const [expanded, setExpanded] = useState(expandedByDefault);
-  const navigate = useNavigate();
+  const projects = useProjects();
   const create = useCreateProject();
-  const { toast } = useToast();
-  const [planHint, setPlanHint] = useState<string | null>(null);
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    watch,
-    formState: { errors, isSubmitting },
-  } = useForm<NewShelfValues>({ resolver: zodResolver(newShelfSchema), defaultValues: { name: '', platform: 'PS5', layout: 'auto' } });
+  const toast = useToast();
+  const [name, setName] = useState('');
+  const [platform, setPlatform] = useState<Platform>('PS5');
+  const list = projects.data?.projects || [];
+  const plan = projects.data?.plan;
 
-  const platform = watch('platform');
-  const layout = watch('layout');
-
-  const submit = handleSubmit(async (values) => {
-    setPlanHint(null);
-    try {
-      const result = await create.mutateAsync(values);
-      navigate(`/shelves/${encodeURIComponent(result.project.id)}`);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 402) {
-        setPlanHint(error.message);
-      } else {
-        toast('Could not create the shelf', { description: errorMessage(error), tone: 'error' });
-      }
-    }
-  });
-
-  if (!expanded) {
-    return (
-      <div className="inline-create">
-        <Button variant="primary" icon={<Plus size={16} />} onClick={() => setExpanded(true)}>
-          New shelf
-        </Button>
-      </div>
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    create.mutate(
+      { name: name.trim(), platform },
+      {
+        onSuccess: () => {
+          setName('');
+          toast('Shelf created.', 'success');
+        },
+        onError: (err) => toast(err instanceof ApiError && err.status === 402 ? `${err.message} Change the plan with npm run plan.` : errorMessage(err), err instanceof ApiError && err.status === 402 ? 'info' : 'error'),
+      },
     );
-  }
+  };
 
   return (
-    <form className="inline-create panel" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-      <div className="inline-create__field">
-        <label className="field__label" htmlFor="shelf-name">New shelf</label>
-        <input id="shelf-name" placeholder="e.g. Shelf 2026" aria-invalid={Boolean(errors.name)} {...register('name')} />
-        {errors.name && <span className="field__error" role="alert">{errors.name.message}</span>}
-      </div>
-      <div className="field">
-        <span className="field__label">Platform</span>
-        <div className="segment" role="group" aria-label="Platform">
-          {(['PS5', 'PS4'] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={platform === option ? 'active' : ''}
-              aria-pressed={platform === option}
-              onClick={() => setValue('platform', option, { shouldValidate: true })}
-            >
-              {option}
-            </button>
+    <div className="mx-auto flex max-w-[1200px] flex-col gap-6">
+      <PageHeader
+        title="My shelves"
+        subtitle={plan ? `Shelves group covers for review and printing. ${list.length} of ${plan.projects} on the ${plan.label} plan.` : 'Shelves group covers for review and printing.'}
+      />
+
+      <form onSubmit={submit} className="flex flex-wrap items-end gap-2" aria-label="New shelf">
+        <label className="flex min-w-56 flex-1 flex-col gap-1 sm:max-w-sm">
+          <span className="text-xs font-medium text-muted">New shelf</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={80}
+            placeholder="e.g. Living room"
+            className="min-h-11 rounded-control border border-line bg-surface px-3 text-sm placeholder:text-faint hover:border-line-strong"
+          />
+        </label>
+        <Segmented label="Default platform" value={platform} options={[{ value: 'PS5', label: 'PS5' }, { value: 'PS4', label: 'PS4' }]} onChange={setPlatform} />
+        <Button type="submit" variant="primary" icon={<Plus size={16} aria-hidden />} disabled={!name.trim() || create.isPending}>
+          Create shelf
+        </Button>
+      </form>
+
+      {projects.isError ? (
+        <ErrorPanel message={errorMessage(projects.error)} onRetry={() => void projects.refetch()} />
+      ) : projects.isLoading ? (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} className="h-64" />
           ))}
         </div>
-      </div>
-      <div className="field">
-        <span className="field__label">Layout</span>
-        <select value={layout} aria-label="Layout" onChange={(event) => setValue('layout', event.target.value as NewShelfValues['layout'])}>
-          <option value="auto">Auto</option>
-          <option value="ps5">PS5 — white band</option>
-          <option value="ps4">PS4 — accent band</option>
-        </select>
-      </div>
-      <Button type="submit" variant="primary" disabled={isSubmitting}>
-        {isSubmitting ? 'Creating…' : 'Create'}
-      </Button>
-      {!expandedByDefault && <Button onClick={() => setExpanded(false)}>Cancel</Button>}
-      {planHint && <p className="notice notice--info inline-create__hint">{planHint} Re-rendering existing covers stays free.</p>}
-    </form>
+      ) : list.length === 0 ? (
+        <EmptyState title="No shelves yet" action={<ButtonLink variant="primary" to="/">Open the game library</ButtonLink>}>
+          Generating a cover from the library creates “My library” automatically, or name one above.
+        </EmptyState>
+      ) : (
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-4">
+          {list.map((p) => (
+            <li key={p.id}>
+              <Card as="article" className="flex h-full flex-col gap-3 p-4">
+                <div className="grid grid-cols-3 gap-1.5" aria-hidden>
+                  {[0, 1, 2].map((i) =>
+                    p.mosaics?.[i] ? (
+                      <div key={i} className="cover-frame rounded-control">
+                        <img src={p.mosaics[i]} alt="" loading="lazy" />
+                      </div>
+                    ) : (
+                      <div key={i} className="cover-frame rounded-control border border-dashed border-line-strong bg-transparent" />
+                    ),
+                  )}
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold">{p.name}</h2>
+                  <p className="text-xs text-muted">
+                    {p.platform} · {p.coverCount ?? 0} cover{p.coverCount === 1 ? '' : 's'} · {p.readyCount ?? 0} ready to print
+                  </p>
+                </div>
+                <div className="mt-auto flex flex-wrap gap-2">
+                  <ButtonLink size="sm" to={`/review?shelf=${p.id}`}>Review</ButtonLink>
+                  <ButtonLink size="sm" to={`/print/${p.id}`}>Print sheet</ButtonLink>
+                </div>
+              </Card>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-xs text-faint">
+        Prefer a list? <Link to="/review" className="text-muted underline underline-offset-2">The review queue</Link> shows every cover on every shelf.
+      </p>
+    </div>
   );
 }

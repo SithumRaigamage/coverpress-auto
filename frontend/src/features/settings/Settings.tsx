@@ -1,138 +1,103 @@
+/** Settings — read-only status. Keys and models live in .env; the browser never sees a key. */
 import { Link } from 'react-router';
-import { Database, Info, KeyRound, Layers3, ScrollText, ShieldCheck, Sparkles } from 'lucide-react';
 import { errorMessage } from '../../api/client';
 import { useLlmSettings, useSettings } from '../../api/queries';
-import { Chip, ErrorPanel, Meter, Skeleton } from '../../components/ui';
+import { Card, ErrorPanel, Meter, PageHeader, Pill, Skeleton } from '../../components/ui';
+import { compact } from '../../lib/status';
 
-function LocalModeNotice() {
-  return (
-    <div className="notice notice--info" role="note">
-      <ShieldCheck size={17} />
-      <div>
-        <strong>Local mode</strong>
-        <p>No sign-in and one account. Everything stays on this machine — do not expose port 3000 to a network.</p>
-      </div>
-    </div>
-  );
-}
-
-/** Read-only configuration status. Keys and model settings are set in .env. */
 export function Settings() {
-  const settingsQuery = useSettings();
-  const llmQuery = useLlmSettings();
+  const settings = useSettings();
+  const llm = useLlmSettings();
+  if (settings.isError) return <ErrorPanel message={errorMessage(settings.error)} onRetry={() => void settings.refetch()} />;
+  if (!settings.data) return <Skeleton className="h-96" />;
+  const { account, keys, restrictions, storage } = settings.data;
+  const sgdbRule = restrictions.find((r) => r.name === 'sgdb');
 
-  if (settingsQuery.isPending || llmQuery.isPending) {
-    return (
-      <div className="screen">
-        <Skeleton className="skeleton--title" />
-        <div className="settings-grid"><Skeleton className="skeleton--panel" /><Skeleton className="skeleton--panel" /></div>
-      </div>
-    );
-  }
-  if (settingsQuery.isError || !settingsQuery.data) {
-    return (
-      <div className="screen">
-        <ErrorPanel message={errorMessage(settingsQuery.error)} onRetry={() => void settingsQuery.refetch()} />
-      </div>
-    );
-  }
-
-  const { account, keys, unsupported, storage } = settingsQuery.data;
-  const llm = llmQuery.data;
+  const rows: Array<{ name: string; env: string; set: boolean; note: string }> = [
+    { name: 'RAWG', env: 'RAWG_KEY', set: keys.rawg, note: 'Metadata, screenshots, the game library. 20,000 requests a month free.' },
+    { name: 'SteamGridDB', env: 'SGDB_KEY', set: keys.sgdb, note: sgdbRule?.reason || 'Personal use only.' },
+    { name: 'OpenRouter', env: 'OPENROUTER_KEY', set: keys.openrouter, note: 'Optional hosted alternative to Ollama for back-cover copy.' },
+  ];
 
   return (
-    <div className="screen">
-      <header className="screen-header">
-        <div>
-          <p className="eyebrow">Workspace</p>
-          <h1>Settings</h1>
+    <div className="mx-auto flex max-w-[900px] flex-col gap-6">
+      <PageHeader
+        title="Settings"
+        subtitle="Local mode: one account, no sign-in, bound to 127.0.0.1. Keys and models are read from .env at start-up — edit it and restart to change them."
+      />
+
+      <Card className="p-5">
+        <h2 className="mb-3 text-[15px] font-semibold">Plan and usage</h2>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Meter label={`Covers this month · ${account.plan.label}`} value={account.usage.used} max={account.usage.limit} display={`${account.usage.used} / ${account.usage.limit}`} />
+          {account.usage.rawg && (
+            <Meter label="RAWG requests this month" value={account.usage.rawg.used} max={account.usage.rawg.limit} display={`${compact(account.usage.rawg.used)} / ${compact(account.usage.rawg.limit)}`} />
+          )}
         </div>
-        <Chip tone="accent">{account.plan.label}</Chip>
-      </header>
+        <p className="mt-3 text-xs text-faint">A cover is counted once, when it is created. Re-running and re-rendering are free. Change the plan with <code className="font-mono">npm run plan</code>.</p>
+      </Card>
 
-      <LocalModeNotice />
+      <Card className="p-5">
+        <h2 className="mb-3 text-[15px] font-semibold">Providers</h2>
+        <ul className="flex flex-col divide-y divide-line">
+          {rows.map((r) => (
+            <li key={r.env} className="flex flex-wrap items-start gap-3 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">
+                  {r.name} <code className="ml-1 font-mono text-xs text-faint">{r.env}</code>
+                </p>
+                <p className="text-xs text-muted">{r.note}</p>
+              </div>
+              <Pill tone={r.set ? 'success' : 'neutral'} dot>
+                {r.set ? 'Set' : 'Not set'}
+              </Pill>
+            </li>
+          ))}
+        </ul>
+      </Card>
 
-      <div className="notice notice--info" role="note">
-        <Info size={17} />
-        <div>
-          <strong>Configuration lives in <code>.env</code></strong>
-          <p>
-            API keys and Ollama settings are read from your <code>.env</code> file when the server starts.
-            Edit that file and restart with <code>npm run dev</code>. Nothing on this page can be changed
-            from the browser.
-          </p>
-        </div>
-      </div>
-
-      <div className="settings-grid">
-        <section className="panel settings-card">
-          <div className="card-head">
-            <span className="card-head__icon"><Layers3 size={17} /></span>
-            <div><h2>Plan &amp; usage</h2><p>What this workspace can create each month.</p></div>
-          </div>
-          <Meter value={account.usage.used} max={account.usage.limit} label="Covers this month" />
-          <dl className="detail-list">
-            <div><dt>Projects</dt><dd className="mono">{account.usage.projects} / {account.usage.projectLimit}</dd></div>
-            <div><dt>Price</dt><dd className="mono">${account.plan.price}/month</dd></div>
-            <div><dt>Account</dt><dd className="mono">{account.email}</dd></div>
+      <Card className="p-5">
+        <h2 className="mb-3 text-[15px] font-semibold">Language model</h2>
+        {llm.data ? (
+          <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
+            <dt className="text-muted">Provider</dt>
+            <dd>{llm.data.provider === 'openrouter' ? 'OpenRouter' : 'Ollama (local)'}</dd>
+            {llm.data.provider === 'ollama' ? (
+              <>
+                <dt className="text-muted">Host</dt>
+                <dd className="font-mono text-[13px] break-all">{llm.data.ollama.host}</dd>
+                <dt className="text-muted">Text model</dt>
+                <dd className="font-mono text-[13px]">{llm.data.ollama.textModel}</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-muted">Text model</dt>
+                <dd className="font-mono text-[13px]">{llm.data.openrouter.textModel}</dd>
+              </>
+            )}
+            <dt className="text-muted">Status</dt>
+            <dd>
+              <Pill tone={llm.data.status?.connected ? 'success' : 'warning'} dot>
+                {llm.data.status?.connected ? 'Connected' : 'Not reachable'}
+              </Pill>
+              <span className="ml-2 text-xs text-faint">{llm.data.status?.detail}</span>
+            </dd>
           </dl>
-          <p className="subtle">Quota is charged when titles are added. Re-rendering, adjusting and printing an existing cover cost nothing.</p>
-        </section>
+        ) : (
+          <Skeleton className="h-24" />
+        )}
+        <p className="mt-3 text-xs text-faint">Without a model, back-cover copy is built from the RAWG description, so every cover still completes.</p>
+      </Card>
 
-        <section className="panel settings-card">
-          <div className="card-head">
-            <span className="card-head__icon"><KeyRound size={17} /></span>
-            <div><h2>Provider keys</h2><p>Read from <code>.env</code> at startup.</p></div>
-          </div>
-          <dl className="detail-list">
-            <div>
-              <dt>RAWG <span className="mono">RAWG_KEY</span></dt>
-              <dd><Chip tone={keys.rawg ? 'ok' : 'neutral'}>{keys.rawg ? 'Configured' : 'Not set'}</Chip></dd>
-            </div>
-            <div>
-              <dt>OpenRouter <span className="mono">OPENROUTER_KEY</span></dt>
-              <dd><Chip tone={keys.openrouter ? 'ok' : 'neutral'}>{keys.openrouter ? 'Configured' : 'Not set'}</Chip></dd>
-            </div>
-          </dl>
-          <div className="notice notice--warn">
-            <ShieldCheck size={17} />
-            <div>
-              <strong>SteamGridDB unavailable</strong>
-              <p>{unsupported.find((item) => item.name === 'sgdb')?.reason ?? 'Personal, non-commercial terms only.'} Upload your own art instead.</p>
-            </div>
-          </div>
-        </section>
-
-        <section className="panel settings-card">
-          <div className="card-head">
-            <span className="card-head__icon"><Sparkles size={17} /></span>
-            <div><h2>Language model</h2><p>Read from <code>.env</code> at startup.</p></div>
-          </div>
-          <dl className="detail-list">
-            <div><dt>Provider</dt><dd className="mono">{llm?.provider ?? '—'}</dd></div>
-            <div><dt>Ollama host</dt><dd className="mono">{llm?.ollama.host ?? '—'}</dd></div>
-            <div><dt>Text model</dt><dd className="mono">{llm?.ollama.textModel ?? '—'}</dd></div>
-            <div><dt>Vision model</dt><dd className="mono">{llm?.ollama.visionModel ?? '—'}</dd></div>
-          </dl>
-          <p className="subtle">Cover copy works with deterministic fallbacks even when no model is reachable.</p>
-        </section>
-
-        <section className="panel settings-card">
-          <div className="card-head">
-            <span className="card-head__icon"><Database size={17} /></span>
-            <div><h2>Data</h2><p>Your files never leave this deployment.</p></div>
-          </div>
-          <dl className="detail-list">
-            <div><dt>Database</dt><dd className="mono">{storage.database}</dd></div>
-            <div><dt>Data directory</dt><dd className="mono">{storage.dataDir}</dd></div>
-          </dl>
-          <div className="card-head">
-            <span className="card-head__icon"><ScrollText size={17} /></span>
-            <div><h2>Legal</h2><p>Personal-use terms and what the renderer refuses to draw.</p></div>
-          </div>
-          <Link className="btn btn--secondary btn--md" to="/legal">Read acceptable use</Link>
-        </section>
-      </div>
+      <Card className="p-5">
+        <h2 className="mb-2 text-[15px] font-semibold">Data</h2>
+        <p className="text-sm text-muted">
+          Everything stays on this machine, in <code className="font-mono">{storage.dataDir}/</code> ({storage.database}). Back that folder up.
+        </p>
+        <p className="mt-3 text-sm">
+          <Link to="/legal" className="text-accent underline underline-offset-2">Acceptable use</Link>
+        </p>
+      </Card>
     </div>
   );
 }
