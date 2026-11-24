@@ -84,7 +84,7 @@ item, not official, and not for sale.
 | --- | --- | --- |
 | RAWG | 20,000 req/month, key as query param | Title match, description, publisher, ESRB rating, screenshots. **Backlink attribution is a licensing condition** — print "Game data by RAWG.io" on the back panel. |
 | SteamGridDB | Free key, Bearer auth | 600×900 portrait grids and hero banners. Its Terms of Use are personal, non-commercial only. The CLI and the **local** web app may call it, and only when `SGDB_KEY` is set in `.env` (off by default). **Never in a hosted or paid deployment** — a paid service calling it, even with the customer's key, is a ToS breach. Its "grid" category is often finished retail art with the real logo lockup baked in; the server requests no-logo/alternate/blurred/material styles only. |
-| OpenRouter | `:free` models — 20 req/min, 50 req/day unfunded, 1,000/day after a one-time $10 purchase | Back-cover copy, art prompts, vision review. |
+| Ollama | Local, no key, no quota | The **only** language model: `llama3.2` writes back-cover copy and art prompts, `llava` reviews the rendered front. When it is down, every slot falls back to RAWG-derived text. OpenRouter was removed on purpose — do not add a hosted LLM provider back. |
 | Gemini | Flash models, 10 req/min, 1,500 req/day | Same jobs, alternative provider. |
 
 **No free image generation exists.** Gemini's image API has no free tier and
@@ -94,9 +94,8 @@ when enabled) and ranked by fit against the panel (`artFit` in `lib/qc.mjs`). Up
 hidden override in review; the CLI has a drop-in folder. Generation is never a pipeline
 step. Do not write code that tries to generate images.
 
-Which OpenRouter models carry `:free` rotates. Never hardcode a model ID as the only
-option — `npm run models` queries `/api/v1/models` and filters for `:free`, separating
-those whose `architecture.input_modalities` includes `image`.
+Model names come from `.env` (`OLLAMA_TEXT_MODEL`, `OLLAMA_VISION_MODEL`); `npm run models`
+lists what is installed locally.
 
 In the SaaS, provider keys are **per account**, sealed with AES-256-GCM and used only
 server-side. Never move them to a shared deployment key: RAWG's licence and free quota
@@ -150,8 +149,7 @@ Before changing pricing, adding a provider or adding an image source, read
   operator can change the plan while the process runs, and quota must follow.
 - Cache all fetched metadata and images under `data/art/` (SaaS) or `out/.cache/` (CLI)
   keyed by id/slug. Re-runs must cost zero API calls.
-- Sleep between API calls to respect rate limits: 400 ms for RAWG, 3.2 s for
-  OpenRouter, 6.5 s for Gemini.
+- Sleep between API calls to respect rate limits: 400 ms for RAWG, 6.5 s for Gemini.
 - Every template slot must have a deterministic fallback built from RAWG data, so
   covers look identical whether or not a language model is configured.
 - Never let a failed game abort a batch — record the error and move on.
@@ -179,7 +177,7 @@ npm start          same, without --env-file
 npm run build      CLI: fetch, compose, auto-check games.txt
 npm run rebuild    CLI: same, ignoring the cache
 npm run prompts    CLI: write art prompts to art/<slug>/PROMPTS.md
-npm run models     CLI: list OpenRouter free models
+npm run models     CLI: list installed Ollama models
 npm run print      CLI: A4 print sheet of approved covers
 npm run plan       operator: set the local account's plan
 npm run usage      operator: covers and projects used this month

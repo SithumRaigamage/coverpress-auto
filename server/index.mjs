@@ -25,7 +25,7 @@ import * as repo from "./repo.mjs";
 import * as auth from "./auth.mjs";
 import { buildCover } from "./build.mjs";
 import { createWorker, enqueueBuild, pendingJobs, latestJobForCover, activeJobs } from "./jobs.mjs";
-import { llmConfig, llmOpts, llmAvailable, publicLlmConfig } from "./llm.mjs";
+import { llmConfig, llmOpts, publicLlmConfig } from "./llm.mjs";
 import { listModels, llmCopy, RAWG_ORDERING } from "../lib/sources.mjs";
 import { createCatalog } from "./catalog.mjs";
 import { PIPELINE_STEPS, jobRunDto, progressReporter } from "./progress.mjs";
@@ -580,7 +580,7 @@ export function createApp(options = {}) {
     const names = auth.providerKeyNames(db, account().id);
     return sendJson(res, 200, {
       account: accountDto(),
-      keys: { rawg: names.has("rawg"), openrouter: names.has("openrouter"), sgdb: names.has("sgdb") },
+      keys: { rawg: names.has("rawg"), sgdb: names.has("sgdb"), gemini: names.has("gemini") },
       // Providers with use restrictions the UI must state next to their status.
       restrictions: [{ name: "sgdb", reason: "SteamGridDB terms allow personal, non-commercial use only. Leave SGDB_KEY unset in any hosted or paid deployment." }],
       unsupported: [],
@@ -593,18 +593,14 @@ export function createApp(options = {}) {
   // a reachability probe. Cached briefly: the sidebar asks on every page.
   let probeCache = { at: 0, key: "", value: null };
   async function probeLlm(config) {
-    const key = `${config.provider}|${config.ollama.host}`;
+    const key = config.ollama.host;
     if (probeCache.value && probeCache.key === key && Date.now() - probeCache.at < 15_000) return probeCache.value;
     let value;
-    if (config.provider === "openrouter") {
-      value = { connected: Boolean(config.openrouter.key), detail: config.openrouter.key ? "Key configured" : "OPENROUTER_KEY is not set" };
-    } else {
-      try {
-        const res = await fetch(`${config.ollama.host.replace(/\/+$/, "")}/api/tags`, { signal: AbortSignal.timeout(1500) });
-        value = res.ok ? { connected: true, detail: "Ollama answered" } : { connected: false, detail: `Ollama returned ${res.status}` };
-      } catch {
-        value = { connected: false, detail: `No answer from ${config.ollama.host}` };
-      }
+    try {
+      const res = await fetch(`${config.ollama.host.replace(/\/+$/, "")}/api/tags`, { signal: AbortSignal.timeout(1500) });
+      value = res.ok ? { connected: true, detail: "Ollama answered" } : { connected: false, detail: `Ollama returned ${res.status}` };
+    } catch {
+      value = { connected: false, detail: `No answer from ${config.ollama.host}` };
     }
     value = { ...value, checkedAt: new Date().toISOString() };
     probeCache = { at: Date.now(), key, value };
@@ -710,8 +706,7 @@ export function createApp(options = {}) {
     const cached = await catalog.cachedCopy(g.meta.id);
     if (cached && !body.refresh) return sendJson(res, 200, cached);
     const llm = llmConfig(db, account().id, secret);
-    let copy = null;
-    if (llmAvailable(llm)) copy = await llmCopy(g.meta, llmOpts(llm, "text")).catch(() => null);
+    const copy = await llmCopy(g.meta, llmOpts(llm, "text")).catch(() => null);
     const clean = copy ? cleanCopy(copy) : null;
     if (clean) {
       const value = { ...clean, source: llm.provider };

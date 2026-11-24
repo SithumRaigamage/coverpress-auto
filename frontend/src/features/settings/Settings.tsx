@@ -16,7 +16,6 @@ export function Settings() {
   const rows: Array<{ name: string; env: string; set: boolean; note: string }> = [
     { name: 'RAWG', env: 'RAWG_KEY', set: keys.rawg, note: 'Metadata, screenshots, the game library. 20,000 requests a month free.' },
     { name: 'SteamGridDB', env: 'SGDB_KEY', set: keys.sgdb, note: sgdbRule?.reason || 'Personal use only.' },
-    { name: 'OpenRouter', env: 'OPENROUTER_KEY', set: keys.openrouter, note: 'Optional hosted alternative to Ollama for back-cover copy.' },
   ];
 
   return (
@@ -60,21 +59,12 @@ export function Settings() {
         <h2 className="mb-3 text-[15px] font-semibold">Language model</h2>
         {llm.data ? (
           <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-            <dt className="text-muted">Provider</dt>
-            <dd>{llm.data.provider === 'openrouter' ? 'OpenRouter' : 'Ollama (local)'}</dd>
-            {llm.data.provider === 'ollama' ? (
-              <>
-                <dt className="text-muted">Host</dt>
-                <dd className="font-mono text-[13px] break-all">{llm.data.ollama.host}</dd>
-                <dt className="text-muted">Text model</dt>
-                <dd className="font-mono text-[13px]">{llm.data.ollama.textModel}</dd>
-              </>
-            ) : (
-              <>
-                <dt className="text-muted">Text model</dt>
-                <dd className="font-mono text-[13px]">{llm.data.openrouter.textModel}</dd>
-              </>
-            )}
+            <dt className="text-muted">Host</dt>
+            <dd className="font-mono text-[13px] break-all">{llm.data.ollama.host}</dd>
+            <dt className="text-muted">Back-cover copy</dt>
+            <dd className="font-mono text-[13px]">{llm.data.ollama.textModel}</dd>
+            <dt className="text-muted">QC review</dt>
+            <dd className="font-mono text-[13px]">{llm.data.vision ? llm.data.ollama.visionModel : 'off (VISION_REVIEW=false)'}</dd>
             <dt className="text-muted">Status</dt>
             <dd>
               <Pill tone={llm.data.status?.connected ? 'success' : 'warning'} dot>

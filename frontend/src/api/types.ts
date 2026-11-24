@@ -145,16 +145,17 @@ export interface PrintPlan {
 
 export interface Settings {
   account: Account;
-  keys: { rawg: boolean; openrouter: boolean; sgdb: boolean };
+  keys: { rawg: boolean; sgdb: boolean; gemini: boolean };
   restrictions: Array<{ name: string; reason: string }>;
   unsupported: Array<{ name: string; reason: string }>;
   storage: { dataDir: string; database: string };
 }
 
 export interface LlmSettings {
-  provider: 'ollama' | 'openrouter';
+  provider: 'ollama';
   ollama: { host: string; textModel: string; visionModel: string };
-  openrouter: { textModel: string; visionModel: string; configured?: boolean };
+  /** llava review of each rendered front (VISION_REVIEW). */
+  vision: boolean;
   status?: { connected: boolean; detail: string; checkedAt: string };
 }
 

@@ -112,14 +112,7 @@ function SidebarFooter() {
   const usage = me.data?.account.usage;
   const rawg = usage?.rawg;
   const connected = llm.data?.status?.connected;
-  const provider = llm.data?.provider === 'openrouter' ? 'OpenRouter' : 'Ollama';
-  const statusText = llm.isLoading
-    ? 'Checking language model…'
-    : connected
-      ? `${provider} connected`
-      : llm.data?.provider === 'openrouter'
-        ? 'OpenRouter key missing'
-        : 'Ollama not reachable';
+  const statusText = llm.isLoading ? 'Checking Ollama…' : connected ? 'Ollama connected' : 'Ollama not reachable';
 
   return (
     <div className="hidden flex-col gap-4 border-t border-line px-5 py-4 md:flex">

@@ -192,7 +192,7 @@ result; `usage` lists covers used this month per account.
 Tests: `tests/quota.test.mjs` exercises the plan change through the database.
 
 ### E4 · Per-account provider keys — P0 · shipped
-As Nia, I want to use my own RAWG/OpenRouter keys without them being visible to anyone,
+As Nia, I want to use my own RAWG keys without them being visible to anyone,
 including support.
 
 Acceptance criteria

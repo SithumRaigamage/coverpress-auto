@@ -61,30 +61,36 @@ const server = await boot();
 after(() => server.stop());
 const url = server.url;
 
-test("settings expose Ollama defaults and a real connection status without leaking a key", async () => {
-  const saved = process.env.OPENROUTER_KEY;
+test("settings expose Ollama only, with a real connection status", async () => {
   const savedHost = process.env.OLLAMA_HOST;
-  process.env.OPENROUTER_KEY = "sk-should-never-appear";
   // Port 9 (discard) on loopback refuses connections: the probe must say so, quickly.
   process.env.OLLAMA_HOST = "http://127.0.0.1:9";
   try {
     const { res, body } = await getJson(url, "/api/settings/llm");
     assert.equal(res.status, 200);
     assert.equal(body.provider, "ollama");
-    assert.match(body.ollama.host, /127\.0\.0\.1:9/);
-    assert.equal(body.openrouter.configured, true);
+    assert.equal(body.ollama.textModel, "llama3.2");
+    assert.equal(body.ollama.visionModel, "llava");
     assert.equal(body.status.connected, false);
     assert.match(body.status.detail, /No answer/);
-    assert.equal(JSON.stringify(body).includes("sk-should-never-appear"), false);
+    assert.equal("openrouter" in body, false);
   } finally {
-    if (saved === undefined) delete process.env.OPENROUTER_KEY;
-    else process.env.OPENROUTER_KEY = saved;
     if (savedHost === undefined) delete process.env.OLLAMA_HOST;
     else process.env.OLLAMA_HOST = savedHost;
   }
 });
 
 test("LLM settings are read-only from the browser", async () => {
-  const res = await put(url, "/api/settings/llm", { provider: "openrouter" });
+  const res = await put(url, "/api/settings/llm", { provider: "ollama" });
   assert.equal(res.status, 404);
+});
+
+test("copy drafting sends a seed to Ollama so a variant gets new wording", async () => {
+  globalThis.fetch = realFetch;
+  const calls = stub({ message: { content: JSON.stringify({ blurb: "B", features: [], tagline: "T" }) } });
+  await llmCopy({ name: "Seed Game", genres: [], description: "" }, { host: "http://ollama.test:11434", model: "llama3.2", seed: 3 });
+  const body = JSON.parse(calls[0].opts.body);
+  assert.equal(body.options.seed, 3);
+  assert.match(body.messages[0].content, /alternative version #4/);
+  globalThis.fetch = realFetch;
 });

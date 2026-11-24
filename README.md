@@ -72,9 +72,8 @@ read-only; edit `.env` and restart to change anything.
 | --- | --- |
 | `RAWG_KEY` | Required. Library, metadata, screenshots. 20,000 requests a month free; the sidebar meter counts the server's calls. |
 | `SGDB_KEY` | Optional, **personal, non-commercial use only**. Adds SteamGridDB portrait grids and hero banners to the art picker. Leave it unset in any hosted or paid deployment. |
-| `LLM_PROVIDER` | `ollama` (default, local, no key) or `openrouter` |
 | `OLLAMA_HOST`, `OLLAMA_TEXT_MODEL` | Ollama for back-cover copy (default `llama3.2`). The sidebar dot shows whether Ollama is actually reachable. |
-| `OPENROUTER_KEY`, `OPENROUTER_TEXT_MODEL` | Hosted alternative to Ollama |
+| `OLLAMA_VISION_MODEL`, `VISION_REVIEW` | `llava` reviews each rendered front during quality checks (default on) |
 | `PORT`, `HOST` | API bind address (default `127.0.0.1:3000`) |
 | `DATA_DIR` | SQLite, art cache, renders (default `data/`) |
 
@@ -104,7 +103,7 @@ RAWG detail, measured art sizes and SteamGridDB results are cached under
 npm run build      # fetch, compose, auto-check games.txt
 npm run rebuild    # same, ignoring the cache
 npm run print      # A4 print sheet of approved covers
-npm run models     # list Ollama / OpenRouter models
+npm run models     # list installed Ollama models
 npm run plan studio   # change the local account's plan
 npm run usage         # covers and projects used this month
 ```

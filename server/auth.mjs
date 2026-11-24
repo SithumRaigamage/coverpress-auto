@@ -82,7 +82,7 @@ export function recordUsage(db, accountId, kind, ref = "") {
 // them.
 // SteamGridDB is personal, non-commercial use only. It is read from .env so a
 // local user can opt in; a hosted or paid deployment must leave SGDB_KEY unset.
-const KEY_ENV = { rawg: "RAWG_KEY", openrouter: "OPENROUTER_KEY", sgdb: "SGDB_KEY" };
+const KEY_ENV = { rawg: "RAWG_KEY", sgdb: "SGDB_KEY", gemini: "GEMINI_API_KEY" };
 
 export function loadSecret(dataDir, envSecret) {
   if (envSecret && String(envSecret).length >= 16) {

@@ -182,7 +182,6 @@ function Detail({
           <CopyCard
             copy={copy}
             drafting={draft.isPending}
-            provider={llm.data?.provider}
             onChange={(c) => {
               setCopy(c);
               setEdited(true);
@@ -329,17 +328,15 @@ function CopyCard({
   copy,
   onChange,
   drafting,
-  provider,
   onRedraft,
 }: {
   copy: BackCopy;
   onChange: (c: BackCopy) => void;
   drafting: boolean;
-  provider?: string;
   onRedraft?: () => void;
 }) {
   const source =
-    drafting ? `Drafting with ${provider === 'openrouter' ? 'OpenRouter' : 'Ollama'}…` : copy.source && copy.source !== 'rawg' ? `Drafted by ${copy.source === 'ollama' ? 'Ollama' : 'OpenRouter'}` : 'From the RAWG description';
+    drafting ? 'Drafting with Ollama…' : copy.source === 'ollama' ? 'Drafted by Ollama' : 'From the RAWG description';
   const features = useMemo(() => copy.features.join('\n'), [copy.features]);
   const field =
     'w-full rounded-control border border-transparent bg-transparent px-2 py-1.5 text-text hover:border-line focus:border-line-strong focus:bg-bg';

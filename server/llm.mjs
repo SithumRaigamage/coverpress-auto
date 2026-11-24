@@ -1,68 +1,42 @@
-/* Language-model configuration — read only from the process environment.
+/* Language-model configuration — Ollama only, read from the process environment.
 
-   Ollama is the default: it runs on the user's machine, needs no API key and
-   keeps the prompt data local. OpenRouter remains available for people who
-   prefer a hosted `:free` model. Nothing here is writable from the browser;
-   .env is the single source of truth and changes require a server restart.
-   `publicLlmConfig` is the only shape ever sent to a client. */
-
-import { providerKey } from "./auth.mjs";
+   Ollama runs on the user's machine, needs no API key and keeps the prompt data
+   local: llama3.2 writes back-cover copy and art prompts, llava reviews the
+   rendered front. Nothing here is writable from the browser; .env is the single
+   source of truth and changes require a server restart. When Ollama is down,
+   every caller falls back to deterministic RAWG-derived text. */
 
 export const LLM_DEFAULTS = {
-  provider: "ollama",
   ollamaHost: "http://127.0.0.1:11434",
   ollamaTextModel: "llama3.2",
   ollamaVisionModel: "llava",
-  openrouterTextModel: "openrouter/free",
-  openrouterVisionModel: "openrouter/free",
 };
 
-/** Values used by the build worker. Includes the OpenRouter key; never serialise this. */
-export function llmConfig(_db, _accountId) {
+export function llmConfig() {
   const env = (name, fallback) => String(process.env[name] || fallback).trim() || fallback;
-  const provider = env("LLM_PROVIDER", LLM_DEFAULTS.provider).toLowerCase();
   return {
-    provider: ["ollama", "openrouter"].includes(provider) ? provider : LLM_DEFAULTS.provider,
+    provider: "ollama",
     ollama: {
       host: env("OLLAMA_HOST", LLM_DEFAULTS.ollamaHost),
       textModel: env("OLLAMA_TEXT_MODEL", LLM_DEFAULTS.ollamaTextModel),
       visionModel: env("OLLAMA_VISION_MODEL", LLM_DEFAULTS.ollamaVisionModel),
     },
-    openrouter: {
-      textModel: env("OPENROUTER_TEXT_MODEL", LLM_DEFAULTS.openrouterTextModel),
-      visionModel: env("OPENROUTER_VISION_MODEL", LLM_DEFAULTS.openrouterVisionModel),
-      key: providerKey(null, null, "openrouter"),
-    },
+    // VISION_REVIEW=false skips the llava check of each rendered front.
+    vision: String(process.env.VISION_REVIEW ?? "true").toLowerCase() !== "false",
   };
 }
 
-/** Safe to send to a browser: capability flags instead of secret values. */
+/** Safe to send to a browser. There is no secret in it. */
 export function publicLlmConfig(config) {
-  return {
-    provider: config.provider,
-    ollama: { ...config.ollama },
-    openrouter: {
-      textModel: config.openrouter.textModel,
-      visionModel: config.openrouter.visionModel,
-      configured: Boolean(config.openrouter.key),
-    },
-  };
+  return { provider: "ollama", ollama: { ...config.ollama }, vision: config.vision };
 }
 
-export const llmAvailable = (config) => config.provider === "ollama" || Boolean(config.openrouter.key);
-
-/** opts for lib/sources.mjs — same shape for both providers. */
-export function llmOpts(config, which = "text") {
-  if (config.provider === "ollama") {
-    return {
-      provider: "ollama",
-      host: config.ollama.host,
-      model: which === "vision" ? config.ollama.visionModel : config.ollama.textModel,
-    };
-  }
+/** opts for lib/sources.mjs. `extra` carries per-call options such as a seed. */
+export function llmOpts(config, which = "text", extra = {}) {
   return {
-    provider: "openrouter",
-    key: config.openrouter.key,
-    model: which === "vision" ? config.openrouter.visionModel : config.openrouter.textModel,
+    provider: "ollama",
+    host: config.ollama.host,
+    model: which === "vision" ? config.ollama.visionModel : config.ollama.textModel,
+    ...extra,
   };
 }

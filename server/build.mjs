@@ -18,7 +18,7 @@ import { artFit } from "../lib/qc.mjs";
 import { rawgLookup, llmCopy, fetchBuffer } from "../lib/sources.mjs";
 import * as repo from "./repo.mjs";
 import { providerKey } from "./auth.mjs";
-import { llmConfig, llmAvailable, llmOpts } from "./llm.mjs";
+import { llmConfig, llmOpts } from "./llm.mjs";
 import { safeJoin } from "./http.mjs";
 import { nullReporter } from "./progress.mjs";
 
@@ -188,10 +188,8 @@ async function buildOnce({ db, dataDir, secret, accountId, coverId, cover, logge
     // Ollama is local and needs no key, so "configured" means "selected".
     // A dead local server is not fatal: deterministic fallbacks fill the slots.
     const llm = llmConfig(db, accountId, secret);
-    if (llmAvailable(llm)) {
-      copy = await llmCopy(meta, llmOpts(llm, "text")).catch(() => null);
-      if (copy) repo.setCoverMeta(db, coverId, { copy });
-    }
+    copy = await llmCopy(meta, llmOpts(llm, "text")).catch(() => null);
+    if (copy) repo.setCoverMeta(db, coverId, { copy });
     reporter.done("copy", copy ? `${llm.provider} · ${wordCount(copy.blurb)} words` : "Language model unavailable — RAWG description used.");
   } else {
     reporter.skip("copy", "No metadata — the back panel uses defaults.");
