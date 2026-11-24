@@ -16,9 +16,9 @@ test('search → generate → run completes → approve → print', async ({ pag
   await expect(page).toHaveURL(/\/runs\/[\w-]+$/);
   await expect(page.getByRole('heading', { level: 1, name: 'Iron Tide' })).toBeVisible();
 
-  // All seven steps finish; RAWG-only 16:9 art is a heavy crop, so it lands in review.
+  // Every step finishes (AI art is skipped: off in Settings); 16:9 art is a heavy crop, so it lands in review.
   const steps = page.getByRole('list', { name: 'Pipeline steps' }).getByRole('listitem');
-  await expect(steps).toHaveCount(7);
+  await expect(steps).toHaveCount(8);
   await expect(page.getByText('Needs review', { exact: true })).toBeVisible();
   await expect(steps.filter({ hasText: 'Waiting' })).toHaveCount(0);
   await expect(page.getByRole('img', { name: /Full wrap for Iron Tide/ })).toBeVisible();
@@ -29,7 +29,7 @@ test('search → generate → run completes → approve → print', async ({ pag
   await expect(page).toHaveURL(/\/review\?cover=/);
   const review = page.getByRole('region', { name: 'Needs review' });
   await expect(review.getByRole('article', { name: /Iron Tide/ })).toBeVisible();
-  await review.getByRole('button', { name: 'Approve Iron Tide' }).click();
+  await review.getByRole('button', { name: 'Approve Iron Tide version 1' }).click();
   const approved = page.getByRole('region', { name: 'Approved' });
   await expect(approved.getByRole('article', { name: /Iron Tide/ })).toBeVisible();
 
@@ -41,6 +41,24 @@ test('search → generate → run completes → approve → print', async ({ pag
   await expect(wrap).toBeVisible();
   await expect(wrap).toHaveAttribute('src', /\/api\/renders\/[\w-]+\/wrap\.png$/);
   await expect(page.getByRole('button', { name: /Print \(1\)/ })).toBeEnabled();
+});
+
+test('Run again adds a new version to the same card, and any version can be approved', async ({ page }) => {
+  await page.goto('/?q=neon');
+  await page.getByRole('button', { name: 'Generate cover for Neon Harbor' }).click();
+  await expect(page.getByText('Needs review', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Go to review' }).click();
+  const card = page.getByRole('region', { name: /^Needs review/ }).getByRole('article', { name: /Neon Harbor/ });
+  await card.getByRole('button', { name: 'Run Neon Harbor again' }).click();
+
+  // Still one card for the game; it now holds v1 and v2, showing v2.
+  const versions = page.getByRole('radiogroup', { name: 'Versions of Neon Harbor' });
+  await expect(versions.getByRole('radio', { name: 'Show version 2' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('article', { name: /Neon Harbor/ })).toHaveCount(1);
+
+  await versions.getByRole('radio', { name: 'Show version 1' }).click();
+  await page.getByRole('button', { name: 'Approve Neon Harbor version 1' }).click();
+  await expect(page.getByRole('region', { name: /^Approved/ }).getByRole('article', { name: /Neon Harbor/ })).toBeVisible();
 });
 
 test('the art picker auto-selects the best fit and a click swaps the front', async ({ page }) => {

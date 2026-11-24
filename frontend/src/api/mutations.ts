@@ -2,7 +2,7 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import { qk } from './queries';
-import type { CoverStatus, CoversResponse, CreateCoverInput, Platform } from './types';
+import type { Cover, CoverStatus, CoversResponse, CreateCoverInput, Overrides, Platform, RunMode } from './types';
 
 /** Everything a pipeline change can move: lists, counters, the library's status pills. */
 function invalidatePipeline(client: QueryClient, coverId?: string) {
@@ -17,14 +17,14 @@ function invalidatePipeline(client: QueryClient, coverId?: string) {
   }
 }
 
-/** Set one cover's status in every cached cover list; returns a rollback. */
-function patchCoverStatus(client: QueryClient, coverId: string, status: CoverStatus) {
+/** Patch one cover in every cached cover list; returns a rollback. */
+function patchCoverStatus(client: QueryClient, coverId: string, status: CoverStatus, extra: Partial<Cover> = {}) {
   const snapshots = client.getQueriesData<CoversResponse>({ queryKey: qk.coversAll });
   for (const [key, data] of snapshots) {
     if (!data) continue;
     client.setQueryData<CoversResponse>(key, {
       ...data,
-      covers: data.covers.map((c) => (c.id === coverId ? { ...c, status } : c)),
+      covers: data.covers.map((c) => (c.id === coverId ? { ...c, status, ...extra } : c)),
     });
   }
   return () => {
@@ -70,12 +70,27 @@ export function useDraftCopy(rawgId: string) {
   });
 }
 
-/** Replay: rebuild from stored metadata and art. Free of quota. */
+/** Replay. 'variant' (default) = a new version with new art, shots, copy and
+ *  layout; 'same' = re-render the stored inputs. Both are free of quota. */
 export function useReplay() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (coverId: string) => api.buildCover(coverId),
-    onSuccess: (_r, coverId) => invalidatePipeline(client, coverId),
+    mutationFn: ({ coverId, mode = 'variant' }: { coverId: string; mode?: RunMode }) => api.buildCover(coverId, mode),
+    onSuccess: (_r, { coverId }) => invalidatePipeline(client, coverId),
+  });
+}
+
+/** Inline adjust in review: save overrides and re-render with the same art (a new version). */
+export function useAdjust() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ coverId, overrides }: { coverId: string; overrides: Overrides }) => api.renderCover(coverId, overrides),
+    onMutate: async ({ coverId }) => {
+      await client.cancelQueries({ queryKey: qk.coversAll });
+      return { rollback: patchCoverStatus(client, coverId, 'queued') };
+    },
+    onError: (_e, _v, ctx) => ctx?.rollback(),
+    onSettled: (_r, _e, { coverId }) => invalidatePipeline(client, coverId),
   });
 }
 
@@ -83,11 +98,11 @@ export function useReplay() {
 export function useDecision() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ coverId, decision }: { coverId: string; decision: 'approved' | 'rejected' }) =>
-      api.decideCover(coverId, decision),
-    onMutate: async ({ coverId, decision }) => {
+    mutationFn: ({ coverId, decision, renderId }: { coverId: string; decision: 'approved' | 'rejected'; renderId?: string }) =>
+      api.decideCover(coverId, decision, renderId),
+    onMutate: async ({ coverId, decision, renderId }) => {
       await client.cancelQueries({ queryKey: qk.coversAll });
-      return { rollback: patchCoverStatus(client, coverId, decision) };
+      return { rollback: patchCoverStatus(client, coverId, decision, { approvedRenderId: decision === 'approved' ? renderId || null : null }) };
     },
     onError: (_e, _v, ctx) => ctx?.rollback(),
     onSettled: (_r, _e, { coverId }) => {

@@ -81,8 +81,31 @@ export interface Cover {
   rawgId?: number | null;
   front?: { source: string; kind: string; width: number; height: number; fit: number | null } | null;
   style?: CoverStyle;
+  /** Reviewer overrides currently applied (zoom, offsets, title size, layout seed). */
+  overrides?: Overrides;
+  /** The version a reviewer approved; null means "the latest". */
+  approvedRenderId?: string | null;
   updatedAt?: string | null;
+  /** Newest first. Present on GET /api/covers. */
+  versions?: CoverVersion[];
 }
+
+export interface CoverVersion {
+  id: string;
+  version: number;
+  createdAt: string;
+  score: number | null;
+  status: CoverStatus | null;
+  issues: QcIssue[];
+  /** 'variant' = new art/copy/layout, 'same' = re-render of stored inputs. */
+  mode: 'variant' | 'same' | null;
+  front: { source: string; kind: string; width: number; height: number } | null;
+  approved: boolean;
+  frontUrl: string;
+  wrapUrl: string;
+}
+
+export type RunMode = 'variant' | 'same';
 
 export type CoverStyle = 'standard' | 'minimal' | 'raw';
 
@@ -117,6 +140,7 @@ export interface Overrides {
   ribbon?: string;
   subtitle?: string;
   style?: CoverStyle;
+  accent?: string;
 }
 
 export interface CoverDetail {

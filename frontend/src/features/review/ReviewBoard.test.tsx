@@ -24,16 +24,33 @@ const cover: Cover = {
   thumbUrl: '/api/renders/r1/front.png',
   wrapUrl: '/api/renders/r1/wrap.png',
   projectName: 'My library',
+  approvedRenderId: null,
+  versions: [2, 1].map((n) => ({
+    id: `r${n}`,
+    version: n,
+    createdAt: '2026-01-01T00:00:00Z',
+    score: n === 2 ? 72 : 58,
+    status: 'needs_review' as const,
+    issues: [{ level: 'warn', code: 'landscape', msg: n === 2 ? 'Art is landscape — heavy crop.' : 'Art is soft.' }],
+    mode: n === 2 ? ('variant' as const) : null,
+    front: { source: 'RAWG', kind: 'screenshot', width: 1280, height: 720 },
+    approved: false,
+    frontUrl: `/api/renders/r${n}/front.png`,
+    wrapUrl: `/api/renders/r${n}/wrap.png`,
+  })),
 };
 
 let decision: { status: number; body: unknown } = { status: 200, body: { id: 'c1', status: 'approved', decidedAt: 'now' } };
 const calls: string[] = [];
+const bodies: unknown[] = [];
 
 beforeEach(() => {
   calls.length = 0;
+  bodies.length = 0;
   vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
     const url = String(input);
     calls.push(`${init?.method || 'GET'} ${url}`);
+    if (init?.body) bodies.push(JSON.parse(String(init.body)));
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
     if (url.endsWith('/decision')) {
       // Hold the response briefly so the optimistic state is observable.
@@ -69,7 +86,7 @@ describe('ReviewBoard', () => {
     const card = await within(column('Needs review')).findByRole('article', { name: /Iron Tide/ });
     expect(within(card).getByText('Art is landscape — heavy crop.')).toBeInTheDocument();
 
-    fireEvent.click(within(card).getByRole('button', { name: 'Approve Iron Tide' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve Iron Tide version 2' }));
     // Optimistic: the card moves before the server answers.
     expect(await within(column('Approved')).findByRole('article', { name: /Iron Tide/ })).toBeInTheDocument();
     // Rolled back once the 500 arrives, with the server's sentence in a toast.
@@ -92,5 +109,17 @@ describe('ReviewBoard', () => {
     const select = screen.getByRole('combobox', { name: 'Shelf' });
     fireEvent.keyDown(select, { key: 'a' });
     expect(calls.some((c) => c.includes('/decision'))).toBe(false);
+  });
+
+  it('shows one card with a version switcher and approves the version on screen', async () => {
+    decision = { status: 200, body: { id: 'c1', status: 'approved', decidedAt: 'now', approvedRenderId: 'r1' } };
+    setup();
+    const card = await within(column('Needs review')).findByRole('article', { name: /Iron Tide/ });
+    const versions = within(card).getByRole('radiogroup', { name: 'Versions of Iron Tide' });
+    expect(within(versions).getByRole('radio', { name: 'Show version 2' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(within(versions).getByRole('radio', { name: 'Show version 1' }));
+    expect(within(card).getByText('Art is soft.')).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve Iron Tide version 1' }));
+    await waitFor(() => expect(bodies).toContainEqual({ decision: 'approved', renderId: 'r1' }));
   });
 });

@@ -92,9 +92,18 @@ function Run({ data }: { data: CoverRun }) {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
+              variant="ghost"
+              disabled={active || replay.isPending}
+              title="Re-render the stored art and copy with your current adjustments"
+              onClick={() => replay.mutate({ coverId: cover.id, mode: 'same' }, { onError: (e) => toast(errorMessage(e), 'error') })}
+            >
+              Run again with same art
+            </Button>
+            <Button
               icon={<RotateCcw size={16} aria-hidden />}
               disabled={active || replay.isPending}
-              onClick={() => replay.mutate(cover.id, { onError: (e) => toast(errorMessage(e), 'error') })}
+              title="A new version: next-best art, other screenshots, fresh copy and a new layout"
+              onClick={() => replay.mutate({ coverId: cover.id, mode: 'variant' }, { onError: (e) => toast(errorMessage(e), 'error') })}
             >
               Replay run
             </Button>

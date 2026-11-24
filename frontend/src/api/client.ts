@@ -6,6 +6,8 @@ import type {
   BatchResult,
   CoverDetail,
   CoverRun,
+  CoverVersion,
+  RunMode,
   CoversResponse,
   CoverStatus,
   CreateCoverInput,
@@ -111,20 +113,24 @@ export const api = {
   cover: (id: string) => request<CoverDetail>(`/covers/${segment(id)}`),
   coverRun: (id: string) => request<CoverRun>(`/covers/${segment(id)}/run`),
   runs: () => request<RunsResponse>('/runs'),
-  buildCover: (id: string) =>
-    request<{ coverId: string; jobId: string; pending: number }>(`/covers/${segment(id)}/build`, {
+  /** variant = new art, shots, copy and layout; same = re-render the stored inputs. */
+  buildCover: (id: string, mode: RunMode = 'variant') =>
+    request<{ coverId: string; jobId: string; mode: RunMode; pending: number }>(`/covers/${segment(id)}/build`, {
       method: 'POST',
-      body: body({}),
+      body: body({ mode }),
     }),
+  versions: (id: string) =>
+    request<{ coverId: string; approvedRenderId: string | null; versions: CoverVersion[] }>(`/covers/${segment(id)}/versions`),
   renderCover: (id: string, overrides: Overrides) =>
     request<{ coverId: string; jobId: string; overrides: Overrides; pending: number }>(
       `/covers/${segment(id)}/render`,
       { method: 'POST', body: body({ overrides }) },
     ),
-  decideCover: (id: string, decision: 'approved' | 'rejected', overrides?: Overrides) =>
-    request<{ id: string; status: CoverStatus; decidedAt: string }>(`/covers/${segment(id)}/decision`, {
+  /** Approve a specific version with renderId, or the latest without it. */
+  decideCover: (id: string, decision: 'approved' | 'rejected', renderId?: string) =>
+    request<{ id: string; status: CoverStatus; decidedAt: string; approvedRenderId: string | null }>(`/covers/${segment(id)}/decision`, {
       method: 'POST',
-      body: body({ decision, ...(overrides ? { overrides } : {}) }),
+      body: body({ decision, ...(renderId ? { renderId } : {}) }),
     }),
   /** Re-run the full pipeline for an unreviewed / failed / rejected cover. */
   retryCover: (id: string) =>
