@@ -87,11 +87,11 @@ Radius: 8 px controls, 10 px buttons, 12–14 px cards and panels. Touch targets
 | `/` | Game library: platform segment, genre, year, sort; grid `minmax(188px)` (2 columns on phones); infinite scroll with a "Load more" fallback; multi-select → batch | `GET /api/rawg/search` (infinite) |
 | `/games/:rawgId` | Detail and art picker: front preview, Platform and Layout segments (Standard / Minimal / Raw image), copy card, Run all steps / Add to shelf, art grid with All / RAWG / SteamGridDB tabs | `GET /api/games/:id`, `/art`; `POST /copy`, `/covers` |
 | `/runs` | Recent runs | `GET /api/runs` |
-| `/runs/:coverId` | Pipeline run: status badge, Replay run, Go to review, progress bar, 7-step list, wrap preview, QC chips, live log | `GET /api/covers/:id/run`, polled every 1 s while active |
-| `/review` | Kanban (Queued, Building, Needs review, Approved, Failed); shelf filter; Print approved (n) | `GET /api/covers`, `/decision`, `/retry`, `/build` |
+| `/runs/:coverId` | Pipeline run: status badge, Replay run (new variant), Run again with same art, Go to review, progress bar, 8-step list, wrap preview, QC chips, live log | `GET /api/covers/:id/run`, polled every 1 s while active |
+| `/review` | Kanban (Queued, Building, Needs review, Approved, Failed), one card per game + platform with a v1…vN switcher and an Adjust panel; shelf filter; Print approved (n) | `GET /api/covers` (with versions), `/decision` (renderId), `/retry`, `/build`, `/render` |
 | `/shelves` | Shelf cards with mosaics; create shelf | `/api/projects` |
-| `/print`, `/print/:projectId` | Shelf list, then 276 × 154 mm pages with `@page A4 landscape` | `/api/projects/:id/print` |
-| `/settings`, `/legal` | Read-only provider and LLM status, plan, data dir; acceptable use | `/api/settings`, `/api/legal` |
+| `/print`, `/print/:projectId` | Shelf list, then one 281 × 180 mm sheet per A4 landscape page: the 276 × 154 mm wrap at 100%, trim crop marks, spine fold marks, 100 mm ruler, "do not fit to page" note | `/api/projects/:id/print` |
+| `/settings`, `/legal` | Provider status (RAWG, SteamGridDB, Gemini), Ollama status, the AI-art pipeline switch (the only writable setting), plan and usage (dev mode hides the cover meter), data dir; acceptable use | `/api/settings`, `PUT /api/settings/pipeline`, `/api/legal` |
 
 **Fit score** (`artFit` in `lib/qc.mjs`) is 60% how much of the image survives a
 cover-crop to 128:148, plus 40% resolution after that crop against 1748 px. It uses the
@@ -102,9 +102,19 @@ the default front.
 edition line, ribbon, tagline or bullets) and `raw` (front panel is the art edge to edge;
 QC checks only the art).
 
-**Review semantics:** "Run again" calls `/retry` for needs_review, failed and rejected
-covers, and `/build` (replay) otherwise. Rejected covers sit in the Failed column.
-Approve and run again update optimistically and roll back with a toast on error.
+**Review semantics:** "Run again" always makes a new *variant*: the next-best unused
+art, other screenshots, freshly seeded copy and a new layout seed. It calls `/retry`
+for needs_review, failed and rejected covers, and `/build { mode: "variant" }`
+otherwise. "Adjust" saves zoom, offsets and title size through `/render`, with the
+same art. Every run adds a version. The card shows the approved version, else the
+newest; Approve approves the version on screen. Rejected covers sit in the Failed
+column. Approve, run again and adjust update optimistically and roll back with a toast
+on error.
+
+**AI art** (game screen): llama3.2 drafts the prompt from RAWG data. The user may edit
+it, then **Generate art** asks Gemini for 1–4 images (default 2). The new images join
+the grid with an "AI" tag and the first one becomes the front. The card explains that
+`GEMINI_API_KEY` is needed when it is missing.
 
 ## 7. Polling
 
@@ -139,5 +149,6 @@ The board scrolls inside its own container.
   after a game has been opened once (from the disk cache). Fetching them for every card
   would cost RAWG and SteamGridDB requests per scroll.
 - Run updates are polled, not streamed (SSE was optional in the brief).
-- There is no inline nudge editor (zoom, offsets, title size) in review yet; the API
-  (`POST /covers/:id/render`) supports it.
+- The Adjust panel uses sliders only; there is no drag-to-position on the preview.
+- Upscaling a small AI image to 1512 × 1748 px does not add detail. Its fit score is
+  honest about the final size, not the source.

@@ -148,7 +148,16 @@ Before changing pricing, adding a provider or adding an image source, read
   calls `fetch`. Do not add a view layer to `server/` and do not re-create
   `server/public/`. The main flow is automated: no upload or typing step.
 - **Pipeline progress lives on the job row** (`server/progress.mjs`): the build reports
-  seven steps and log lines; `GET /api/covers/:id/run` reads them. Keep step keys stable.
+  its steps (metadata, collect, ai, pick, copy, render, qc, route) and log lines;
+  `GET /api/covers/:id/run` reads them. Keep step keys stable.
+- **One game + platform is one cover.** Every further run is a *version* of it
+  (`renders`, never pruned). Job kind `variant` = next-best unused art, rotated shots,
+  seeded copy and a layout seed; kind `build` = same inputs. Approval can point at any
+  version (`covers.approved_render_id`), and that version is what prints.
+  `server/dedupe.mjs` merges legacy duplicates at start-up. Never create a second cover
+  for an existing game + platform.
+- **`DEV_MODE=true` bypasses plan limits** (`auth.devMode()`); keep every new limit
+  check behind it. RAWG's 20k/month is external and never bypassed.
 - **Wire plan changes through the database row, not a cached account object**: the
   operator can change the plan while the process runs, and quota must follow.
 - Cache all fetched metadata and images under `data/art/` (SaaS) or `out/.cache/` (CLI)

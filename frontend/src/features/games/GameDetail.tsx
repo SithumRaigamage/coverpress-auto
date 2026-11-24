@@ -77,7 +77,8 @@ function Detail({
   }, [data.copy.source, llm.data?.status?.connected, draft, edited]);
 
   const shelves = projects.data?.projects || [];
-  const existing = covers.find((c) => !projectId || c.projectId === projectId) || null;
+  // One cover per game + platform: switching platform means a new cover.
+  const existing = covers.find((c) => c.platform === platform) || null;
   const usage = me.data?.account.usage;
   const left = usage ? Math.max(0, usage.limit - usage.used) : null;
 
@@ -220,7 +221,7 @@ function Detail({
           </div>
           <p className="-mt-2 text-xs text-faint">
             {existing
-              ? 'Already on this shelf — re-running uses no quota.'
+              ? `Already a ${platform} cover — running again adds a version and uses no quota.`
               : me.data?.account.devMode
                 ? 'Developer mode: no cover limit.'
                 : left !== null
