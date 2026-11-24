@@ -85,14 +85,18 @@ item, not official, and not for sale.
 | RAWG | 20,000 req/month, key as query param | Title match, description, publisher, ESRB rating, screenshots. **Backlink attribution is a licensing condition** — print "Game data by RAWG.io" on the back panel. |
 | SteamGridDB | Free key, Bearer auth | 600×900 portrait grids and hero banners. Its Terms of Use are personal, non-commercial only. The CLI and the **local** web app may call it, and only when `SGDB_KEY` is set in `.env` (off by default). **Never in a hosted or paid deployment** — a paid service calling it, even with the customer's key, is a ToS breach. Its "grid" category is often finished retail art with the real logo lockup baked in; the server requests no-logo/alternate/blurred/material styles only. |
 | Ollama | Local, no key, no quota | The **only** language model: `llama3.2` writes back-cover copy and art prompts, `llava` reviews the rendered front. When it is down, every slot falls back to RAWG-derived text. OpenRouter was removed on purpose — do not add a hosted LLM provider back. |
-| Gemini | Flash models, 10 req/min, 1,500 req/day | Same jobs, alternative provider. |
+| Gemini | **Image generation only, paid** — no free image tier | AI front art (`lib/gemini.mjs`, `server/generated.mjs`). `GEMINI_API_KEY` in `.env`, sent as the `x-goog-api-key` header, server-side only; off when unset. Model from `GEMINI_IMAGE_MODEL` (default `gemini-2.5-flash-image`) — never hardcode it as the only option, Google retires image model IDs (`gemini-2.5-flash-image-preview` went on 15 Jan 2026). |
 
-**No free image generation exists.** Gemini's image API has no free tier and
-`gemini-2.5-flash-image-preview` was retired on 15 Jan 2026. Nano Banana 2 via Google
-AI Plus is the consumer app only — no API. So art is **fetched** (RAWG, plus SteamGridDB
-when enabled) and ranked by fit against the panel (`artFit` in `lib/qc.mjs`). Uploading is a
-hidden override in review; the CLI has a drop-in folder. Generation is never a pipeline
-step. Do not write code that tries to generate images.
+**Art sources.** Front art is **fetched** (RAWG, plus SteamGridDB when enabled) or
+**generated** by Gemini when the user asks ("Generate art" on the game screen, or the
+optional pipeline step switched on in Settings). Every candidate is ranked by fit
+against the panel (`artFit` in `lib/qc.mjs`). Generation rules that must not regress:
+the prompt is drafted by llama3.2 from RAWG metadata and may be edited; the server always
+appends "portrait, no text, no logos, no trademarks" (`ART_PROMPT_RULES`); output is
+fitted to at least 1512 × 1748 px; images are cached under `data/art/generated/<rawgId>/`;
+a missing key or exhausted quota is a clear 4xx message, and in the pipeline it falls back
+to fetched art instead of failing the cover. Uploading stays a hidden override in review;
+the CLI has a drop-in folder.
 
 Model names come from `.env` (`OLLAMA_TEXT_MODEL`, `OLLAMA_VISION_MODEL`); `npm run models`
 lists what is installed locally.

@@ -29,6 +29,8 @@ import { llmConfig, llmOpts, publicLlmConfig } from "./llm.mjs";
 import { listModels, llmCopy, RAWG_ORDERING } from "../lib/sources.mjs";
 import { createCatalog } from "./catalog.mjs";
 import { mergeDuplicateCovers } from "./dedupe.mjs";
+import { createGenerator, MAX_PER_PRESS } from "./generated.mjs";
+import { GeminiError, GEMINI_DEFAULT_MODEL } from "../lib/gemini.mjs";
 import { PIPELINE_STEPS, jobRunDto, progressReporter } from "./progress.mjs";
 import { STYLES } from "../lib/cover.mjs";
 import { LEGAL } from "./legal.mjs";
@@ -109,9 +111,20 @@ export function createApp(options = {}) {
 
   // Every server-side RAWG request is counted against the 20k/month free tier.
   const onRawgCall = () => auth.recordUsage(db, account().id, "rawg.request");
+  // AI art (Gemini). Server-side only; off when GEMINI_API_KEY is unset.
+  const generator = createGenerator({
+    dataDir,
+    key: () => auth.providerKey(db, account().id, "gemini"),
+    model: () => String(process.env.GEMINI_IMAGE_MODEL || GEMINI_DEFAULT_MODEL).trim() || GEMINI_DEFAULT_MODEL,
+    logger,
+  });
+  /** Settings → Pipeline → "Generate AI art during runs". Stored per account, not a secret. */
+  const aiStepOn = () => repo.getSettings(db, account().id).aiArtStep === "true";
+
   const catalog =
     options.catalog ||
     createCatalog({
+      generated: generator,
       dataDir,
       keys: {
         rawg: () => auth.providerKey(db, account().id, "rawg"),
@@ -139,6 +152,7 @@ export function createApp(options = {}) {
         attempt: job.attempts,
         kind: job.kind,
         catalog,
+        aiArt: aiStepOn() ? (args) => generator.pipelineStep(args) : null,
         onRawgCall,
       }),
   });
@@ -294,6 +308,10 @@ export function createApp(options = {}) {
         "GET /api/rawg/search",
         "GET /api/games/:rawgId",
         "GET /api/games/:rawgId/art",
+        "GET /api/games/:rawgId/ai-prompt",
+        "POST /api/games/:rawgId/ai-art",
+        "GET /api/generated/:rawgId/:file",
+        "PUT /api/settings/pipeline",
         "POST /api/games/:rawgId/copy",
         "POST /api/games/:rawgId/covers",
         "GET /api/covers",
@@ -646,6 +664,8 @@ export function createApp(options = {}) {
       restrictions: [{ name: "sgdb", reason: "SteamGridDB terms allow personal, non-commercial use only. Leave SGDB_KEY unset in any hosted or paid deployment." }],
       unsupported: [],
       storage: { dataDir: path.basename(dataDir), database: "sqlite" },
+      gemini: { configured: generator.enabled(), model: generator.model() },
+      pipeline: { aiArt: aiStepOn() },
       llm: publicLlmConfig(llmConfig(db, account().id, secret)),
     });
   }
@@ -936,6 +956,48 @@ export function createApp(options = {}) {
     return sendJson(res, 200, { active: activeJobs(db, account().id).length, runs });
   }
 
+  /* --------------------------------------------------------- AI art (Gemini) */
+
+  const fromGemini = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof GeminiError) throw new HttpError(err.status || 502, err.message);
+      throw err;
+    }
+  };
+
+  /** The front-art prompt for a game: the saved edit, else llama3.2's draft (or a RAWG-built fallback). */
+  async function getAiPrompt(req, res, ctx) {
+    const g = await fromCatalog(() => catalog.game(ctx.params.id));
+    const p = await generator.prompt(g.meta.id, g.meta, { refresh: ctx.query.get("refresh") === "1" });
+    return sendJson(res, 200, { ...p, enabled: generator.enabled(), model: generator.model(), maxPerPress: MAX_PER_PRESS });
+  }
+
+  /** "Generate art": `count` images (default 2) from the (edited) prompt. */
+  async function postAiArt(req, res, ctx) {
+    const body = await readJson(req);
+    const g = await fromCatalog(() => catalog.game(ctx.params.id));
+    const prompt = String(body.prompt || "").trim().slice(0, 2000);
+    const out = await fromGemini(() => generator.generate(g.meta.id, g.meta, { prompt, count: body.count ?? 2 }));
+    return sendJson(res, 201, out);
+  }
+
+  async function getGenerated(req, res, ctx) {
+    const file = generator.fileFor(ctx.params.id, ctx.params.file);
+    if (!file) throw new HttpError(404, "Unknown generated image.");
+    const ok = await serveFile(res, file);
+    if (!ok) throw new HttpError(404, "Generated image is missing.");
+  }
+
+  /** Settings → Pipeline. The only writable setting; keys stay in .env. */
+  async function putPipelineSettings(req, res) {
+    const body = await readJson(req);
+    if (typeof body.aiArt !== "boolean") throw new HttpError(400, "aiArt must be true or false.");
+    repo.setSettings(db, account().id, { aiArtStep: String(body.aiArt) });
+    return sendJson(res, 200, { pipeline: { aiArt: aiStepOn() }, gemini: { configured: generator.enabled(), model: generator.model() } });
+  }
+
   /* ------------------------------------------------------------ routing */
 
   const ROUTES = [
@@ -968,6 +1030,10 @@ export function createApp(options = {}) {
     ["GET", /^\/api\/rawg\/search$/, getRawgSearch],
     ["GET", /^\/api\/games\/([^/]+)$/, getGame],
     ["GET", /^\/api\/games\/([^/]+)\/art$/, getGameArt],
+    ["GET", /^\/api\/games\/([^/]+)\/ai-prompt$/, getAiPrompt],
+    ["POST", /^\/api\/games\/([^/]+)\/ai-art$/, postAiArt],
+    ["GET", /^\/api\/generated\/([^/]+)\/([^/]+)$/, getGenerated],
+    ["PUT", /^\/api\/settings\/pipeline$/, putPipelineSettings],
     ["POST", /^\/api\/games\/([^/]+)\/copy$/, draftGameCopy],
     ["POST", /^\/api\/games\/([^/]+)\/covers$/, createGameCover],
     ["GET", /^\/api\/covers$/, listCovers],

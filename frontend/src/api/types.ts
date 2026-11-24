@@ -175,6 +175,8 @@ export interface Settings {
   restrictions: Array<{ name: string; reason: string }>;
   unsupported: Array<{ name: string; reason: string }>;
   storage: { dataDir: string; database: string };
+  gemini: { configured: boolean; model: string };
+  pipeline: { aiArt: boolean };
 }
 
 export interface LlmSettings {
@@ -303,7 +305,7 @@ export interface GameResponse {
 
 export interface ArtItem {
   id: string;
-  source: 'RAWG' | 'SteamGridDB';
+  source: 'RAWG' | 'SteamGridDB' | 'AI';
   kind: string;
   url: string;
   thumb: string;
@@ -316,9 +318,25 @@ export interface ArtItem {
 export interface GameArt {
   items: ArtItem[];
   best: string | null;
-  counts: { all: number; rawg: number; sgdb: number };
+  counts: { all: number; rawg: number; sgdb: number; ai: number };
   sgdb: { enabled: boolean; error: string | null };
+  ai: { enabled: boolean; model: string | null };
   panel: { widthPx: number; heightPx: number; widthMm: number; heightMm: number; dpi: number };
+}
+
+export interface AiPrompt {
+  prompt: string;
+  /** 'ollama' drafted, 'rawg' fallback, 'user' edited. */
+  source: 'ollama' | 'rawg' | 'user';
+  enabled: boolean;
+  model: string;
+  maxPerPress: number;
+}
+
+export interface AiArtResult {
+  items: ArtItem[];
+  /** Per-image failures when some (not all) images failed. */
+  errors: string[];
 }
 
 export interface CreateCoverInput {

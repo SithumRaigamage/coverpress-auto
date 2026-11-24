@@ -19,7 +19,7 @@ import { safeJoin } from "./http.mjs";
 const SEARCH_TTL = 10 * 60 * 1000;
 const SEARCH_MAX = 200;
 
-export function createCatalog({ dataDir, keys, onRawgCall = () => {}, logger = console }) {
+export function createCatalog({ dataDir, keys, onRawgCall = () => {}, logger = console, generated = null }) {
   const searchCache = new Map();
   const inflight = new Map();
 
@@ -172,6 +172,8 @@ export function createCatalog({ dataDir, keys, onRawgCall = () => {}, logger = c
     }
     const sg = await sgdb(rawgId, g.meta.name);
     for (const s of sg.items || []) push(candidate("SteamGridDB", s.kind, `${s.kind === "hero banner" ? "hero" : "grid"}-${s.id}`, s.url, s.width, s.height, s.thumb));
+    // AI images made for this game (data/art/generated), already scored.
+    for (const a of generated ? await generated.list(g.meta.id) : []) push(a);
 
     items.sort((a, b) => b.fit - a.fit || b.width * b.height - a.width * a.height);
     return {
@@ -181,8 +183,10 @@ export function createCatalog({ dataDir, keys, onRawgCall = () => {}, logger = c
         all: items.length,
         rawg: items.filter((i) => i.source === "RAWG").length,
         sgdb: items.filter((i) => i.source === "SteamGridDB").length,
+        ai: items.filter((i) => i.source === "AI").length,
       },
       sgdb: { enabled: sg.enabled, error: sg.error || null },
+      ai: { enabled: Boolean(generated?.enabled()), model: generated?.model() || null },
     };
   }
 
@@ -223,5 +227,8 @@ export function createCatalog({ dataDir, keys, onRawgCall = () => {}, logger = c
     await writeCache(`copy-${id(rawgId)}.json`, copy);
   }
 
-  return { search, game, art, summary, fallbackCopy, cachedCopy, saveCopy };
+  /** Local file for a generated-art URL, so the build reads it from disk. */
+  const localFile = (url) => (generated ? generated.localFile(url) : null);
+
+  return { search, game, art, summary, fallbackCopy, cachedCopy, saveCopy, localFile };
 }

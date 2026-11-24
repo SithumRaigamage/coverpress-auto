@@ -1,17 +1,17 @@
 /** Screen 2 — Game detail & art picker. Picks the best-fit art automatically; one click runs every step. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ChevronRight, Play, Plus, RefreshCw } from 'lucide-react';
+import { ChevronRight, Play, Plus, RefreshCw, Sparkles } from 'lucide-react';
 import { errorMessage } from '../../api/client';
-import { useCreateGameCover, useDraftCopy } from '../../api/mutations';
-import { useGame, useGameArt, useLlmSettings, useMe, useProjects } from '../../api/queries';
+import { useCreateGameCover, useDraftCopy, useGenerateArt } from '../../api/mutations';
+import { useAiPrompt, useGame, useGameArt, useLlmSettings, useMe, useProjects } from '../../api/queries';
 import type { ArtItem, BackCopy, CoverStyle, GameArt, Platform } from '../../api/types';
 import { Button, Card, Chip, ErrorPanel, Pill, Segmented, Select, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
 import { cn } from '../../lib/cn';
 import { fitTone, primaryPlatform, STATUS_META } from '../../lib/status';
 
-type Tab = 'all' | 'RAWG' | 'SteamGridDB';
+type Tab = 'all' | 'RAWG' | 'SteamGridDB' | 'AI';
 
 export function GameDetail() {
   const { rawgId = '' } = useParams();
@@ -230,6 +230,14 @@ function Detail({
           </p>
 
           {/* Available art */}
+          <AiArtCard
+            rawgId={rawgId}
+            onMade={(id) => {
+              setPickedId(id);
+              setTab('all');
+            }}
+          />
+
           <section aria-labelledby="art-heading" className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 id="art-heading" className="text-lg font-semibold">
@@ -243,6 +251,7 @@ function Detail({
                     { value: 'all', label: 'All', count: art.counts.all },
                     { value: 'RAWG', label: 'RAWG', count: art.counts.rawg },
                     { value: 'SteamGridDB', label: 'SteamGridDB', count: art.counts.sgdb },
+                    { value: 'AI', label: 'AI', count: art.counts.ai },
                   ]}
                   onChange={setTab}
                 />
@@ -303,7 +312,7 @@ function ArtGrid({ items, frontId, onPick }: { items: ArtItem[]; frontId: string
               />
               <span className="absolute top-2 left-2 flex gap-1">
                 <span className="rounded-control bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-white">
-                  {item.source === 'SteamGridDB' ? 'SGDB' : 'RAWG'}
+                  {item.source === 'SteamGridDB' ? 'SGDB' : item.source}
                 </span>
                 {isFront && <span className="rounded-control bg-accent px-1.5 py-0.5 text-[11px] font-semibold text-accent-ink">Front</span>}
               </span>
@@ -323,6 +332,78 @@ function ArtGrid({ items, frontId, onPick }: { items: ArtItem[]; frontId: string
         );
       })}
     </ul>
+  );
+}
+
+/** AI art: llama3.2 drafts the prompt from RAWG data; edit it, then Generate art (Gemini). */
+function AiArtCard({ rawgId, onMade }: { rawgId: string; onMade: (artId: string) => void }) {
+  const prompt = useAiPrompt(rawgId);
+  const generate = useGenerateArt(rawgId);
+  const toast = useToast();
+  const [text, setText] = useState<string | null>(null);
+  const [count, setCount] = useState(2);
+  const value = text ?? prompt.data?.prompt ?? '';
+  const enabled = prompt.data?.enabled;
+  const SOURCE = { ollama: 'Drafted by llama3.2 from RAWG data', rawg: 'Built from RAWG data (Ollama is offline)', user: 'Your saved prompt' } as const;
+
+  return (
+    <Card className="flex flex-col gap-2 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+          <Sparkles size={16} aria-hidden className="text-accent" /> AI generated art
+        </h2>
+        <span className="text-xs text-faint">{prompt.data ? `${SOURCE[prompt.data.source]} · ${prompt.data.model}` : 'Drafting a prompt…'}</span>
+      </div>
+      {prompt.data && !enabled && (
+        <p className="text-xs text-warning-text">
+          Set <code className="font-mono">GEMINI_API_KEY</code> in <code className="font-mono">.env</code> and restart to generate art. Gemini image
+          generation is billed by Google.
+        </p>
+      )}
+      <label className="flex flex-col gap-1">
+        <span className="text-[11px] font-medium tracking-wide text-faint uppercase">Prompt</span>
+        <textarea
+          value={value}
+          onChange={(e) => setText(e.target.value)}
+          maxLength={2000}
+          disabled={!prompt.data}
+          className="min-h-24 resize-y rounded-control border border-line bg-bg px-2 py-1.5 text-sm leading-relaxed text-text hover:border-line-strong"
+        />
+      </label>
+      <p className="text-xs text-faint">Always added: portrait, no text, no logos, no trademarks. Images are fitted to 1512 × 1748 px (128 × 148 mm at 300 DPI).</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          icon={<Sparkles size={16} aria-hidden />}
+          disabled={!enabled || !value.trim() || generate.isPending}
+          onClick={() =>
+            generate.mutate(
+              { prompt: value, count },
+              {
+                onSuccess: (r) => {
+                  toast(`${r.items.length} AI image${r.items.length === 1 ? '' : 's'} added${r.errors.length ? ` (${r.errors.length} failed)` : ''}.`, r.errors.length ? 'info' : 'success');
+                  if (r.items[0]) onMade(r.items[0].id);
+                },
+                onError: (e) => toast(errorMessage(e), 'error'),
+              },
+            )
+          }
+        >
+          {generate.isPending ? `Generating ${count}…` : 'Generate art'}
+        </Button>
+        <Select label="Images per press" value={String(count)} onChange={(e) => setCount(Number(e.target.value))}>
+          {[1, 2, 3, 4].map((n) => (
+            <option key={n} value={n}>
+              {n} image{n === 1 ? '' : 's'}
+            </option>
+          ))}
+        </Select>
+        {text !== null && text !== prompt.data?.prompt && (
+          <Button size="sm" variant="ghost" onClick={() => setText(null)}>
+            Reset prompt
+          </Button>
+        )}
+      </div>
+    </Card>
   );
 }
 

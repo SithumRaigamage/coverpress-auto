@@ -128,6 +128,11 @@ globalThis.fetch = async (input, init) => {
     if (target.includes("/grids/")) return json({ data: [{ id: 1, url: g.grid.url, thumb: g.grid.url, width: g.grid.w, height: g.grid.h }] });
     return json({ data: [{ id: 2, url: g.hero.url, thumb: g.hero.url, width: g.hero.w, height: g.hero.h }] });
   }
+  if (target.startsWith("https://generativelanguage.googleapis.com/")) {
+    // Stubbed Gemini: a 3:4 picture, no network, no billing.
+    const data = art(864, 1184, Math.floor(Math.random() * 360), 7).toString("base64");
+    return json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/jpeg", data } }] } }] });
+  }
   if (target.includes(":11434")) throw new Error("connect ECONNREFUSED (Ollama is not part of the e2e stub)");
   return realFetch(input, init);
 };
@@ -144,6 +149,10 @@ await new Promise((resolve) => images.listen(IMG_PORT, "127.0.0.1", resolve));
 
 process.env.RAWG_KEY = "e2e-rawg-key";
 process.env.SGDB_KEY = "e2e-sgdb-key";
+process.env.GEMINI_API_KEY = "e2e-gemini-key";
+process.env.GEMINI_GAP_MS = "0";
+process.env.VISION_REVIEW = "false";
+process.env.DEV_MODE = "true";
 process.env.OLLAMA_HOST = "http://127.0.0.1:11434";
 
 const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "coverpress-e2e-"));

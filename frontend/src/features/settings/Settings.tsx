@@ -1,22 +1,30 @@
-/** Settings — read-only status. Keys and models live in .env; the browser never sees a key. */
+/** Settings — keys and models live in .env (read-only here; the browser never sees a key).
+ *  The one writable setting is the pipeline's optional AI-art step. */
 import { Link } from 'react-router';
 import { errorMessage } from '../../api/client';
+import { useSetPipeline } from '../../api/mutations';
 import { useLlmSettings, useSettings } from '../../api/queries';
+import { useToast } from '../../components/Toast';
+import { cn } from '../../lib/cn';
 import { Card, ErrorPanel, Meter, PageHeader, Pill, Skeleton } from '../../components/ui';
 import { compact } from '../../lib/status';
 
 export function Settings() {
   const settings = useSettings();
   const llm = useLlmSettings();
+  const setPipeline = useSetPipeline();
+  const toast = useToast();
   if (settings.isError) return <ErrorPanel message={errorMessage(settings.error)} onRetry={() => void settings.refetch()} />;
   if (!settings.data) return <Skeleton className="h-96" />;
-  const { account, keys, restrictions, storage } = settings.data;
+  const { account, keys, restrictions, storage, gemini, pipeline } = settings.data;
   const sgdbRule = restrictions.find((r) => r.name === 'sgdb');
 
   const rows: Array<{ name: string; env: string; set: boolean; note: string }> = [
     { name: 'RAWG', env: 'RAWG_KEY', set: keys.rawg, note: 'Metadata, screenshots, the game library. 20,000 requests a month free.' },
     { name: 'SteamGridDB', env: 'SGDB_KEY', set: keys.sgdb, note: sgdbRule?.reason || 'Personal use only.' },
+    { name: 'Gemini', env: 'GEMINI_API_KEY', set: keys.gemini, note: `AI-generated front art (${gemini.model}). Billed by Google; there is no free image tier.` },
   ];
+  const aiOn = pipeline.aiArt;
 
   return (
     <div className="mx-auto flex max-w-[900px] flex-col gap-6">
@@ -72,6 +80,45 @@ export function Settings() {
             </li>
           ))}
         </ul>
+      </Card>
+
+      <Card className="p-5">
+        <h2 className="mb-3 text-[15px] font-semibold">Pipeline</h2>
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <p id="ai-step-label" className="text-sm font-medium">
+              Generate AI art during runs
+            </p>
+            <p id="ai-step-help" className="text-xs text-muted">
+              Adds the “Generate AI art” step: 2 Gemini images the first time a game is built (or reuses images made on its page), and 1 fresh image for
+              each Run again. They compete with fetched art on fit score.
+              {!gemini.configured && ' Needs GEMINI_API_KEY in .env.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={aiOn}
+            aria-labelledby="ai-step-label"
+            aria-describedby="ai-step-help"
+            disabled={setPipeline.isPending || (!gemini.configured && !aiOn)}
+            onClick={() =>
+              setPipeline.mutate(!aiOn, {
+                onSuccess: (r) => toast(r.pipeline.aiArt ? 'AI art step on.' : 'AI art step off.', 'success'),
+                onError: (e) => toast(errorMessage(e), 'error'),
+              })
+            }
+            className="inline-flex size-11 w-16 shrink-0 items-center justify-center rounded-button disabled:opacity-50"
+          >
+            <span className="sr-only">{aiOn ? 'On' : 'Off'}</span>
+            <span
+              aria-hidden
+              className={cn('relative block h-7 w-12 rounded-full border transition-colors', aiOn ? 'border-accent bg-accent' : 'border-line-strong bg-raised')}
+            >
+              <span className={cn('absolute top-0.5 size-5 rounded-full transition-[left]', aiOn ? 'left-6 bg-accent-ink' : 'left-0.5 bg-muted')} />
+            </span>
+          </button>
+        </div>
       </Card>
 
       <Card className="p-5">

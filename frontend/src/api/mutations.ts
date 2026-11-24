@@ -134,3 +134,24 @@ export function useUploadFront() {
     onSuccess: (_r, { coverId }) => invalidatePipeline(client, coverId),
   });
 }
+
+/** "Generate art" on the game screen. New images land in the art grid. */
+export function useGenerateArt(rawgId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ prompt, count }: { prompt: string; count: number }) => api.generateArt(rawgId, prompt, count),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: qk.gameArt(rawgId) });
+      void client.invalidateQueries({ queryKey: qk.aiPrompt(rawgId) });
+    },
+  });
+}
+
+/** Settings → Pipeline → AI art step. */
+export function useSetPipeline() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (aiArt: boolean) => api.setPipeline(aiArt),
+    onSuccess: () => void client.invalidateQueries({ queryKey: qk.settings }),
+  });
+}

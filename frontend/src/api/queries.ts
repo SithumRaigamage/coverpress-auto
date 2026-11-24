@@ -12,6 +12,7 @@ export const qk = {
   libraryAll: ['library'] as const,
   game: (id: string) => ['game', id] as const,
   gameArt: (id: string) => ['game', id, 'art'] as const,
+  aiPrompt: (id: string) => ['game', id, 'ai-prompt'] as const,
   covers: (projectId?: string) => ['covers', projectId || 'all'] as const,
   coversAll: ['covers'] as const,
   cover: (id: string) => ['cover', id] as const,
@@ -45,6 +46,10 @@ export function useLibrary(filters: LibraryFilters) {
 
 export function useGame(rawgId: string) {
   return useQuery({ queryKey: qk.game(rawgId), queryFn: () => api.game(rawgId), staleTime: 60_000, retry: false });
+}
+
+export function useAiPrompt(rawgId: string) {
+  return useQuery({ queryKey: qk.aiPrompt(rawgId), queryFn: () => api.aiPrompt(rawgId), staleTime: Infinity, retry: false });
 }
 
 export function useGameArt(rawgId: string) {

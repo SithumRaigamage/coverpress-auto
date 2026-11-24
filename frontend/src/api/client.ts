@@ -1,6 +1,8 @@
 /** The only module allowed to call fetch. */
 import type {
   Account,
+  AiArtResult,
+  AiPrompt,
   ArtUploadResult,
   BackCopy,
   BatchResult,
@@ -101,6 +103,10 @@ export const api = {
     ),
   game: (rawgId: number | string) => request<GameResponse>(`/games/${segment(rawgId)}`),
   gameArt: (rawgId: number | string) => request<GameArt>(`/games/${segment(rawgId)}/art`),
+  aiPrompt: (rawgId: number | string, refresh = false) =>
+    request<AiPrompt>(`/games/${segment(rawgId)}/ai-prompt${refresh ? '?refresh=1' : ''}`),
+  generateArt: (rawgId: number | string, prompt: string, count = 2) =>
+    request<AiArtResult>(`/games/${segment(rawgId)}/ai-art`, { method: 'POST', body: body({ prompt, count }) }),
   draftCopy: (rawgId: number | string, refresh = false) =>
     request<BackCopy>(`/games/${segment(rawgId)}/copy`, { method: 'POST', body: body({ refresh }) }),
   createGameCover: (rawgId: number | string, input: CreateCoverInput) =>
@@ -150,6 +156,8 @@ export const api = {
 
   settings: () => request<Settings>('/settings'),
   llm: () => request<LlmSettings>('/settings/llm'),
+  setPipeline: (aiArt: boolean) =>
+    request<{ pipeline: Settings['pipeline']; gemini: Settings['gemini'] }>('/settings/pipeline', { method: 'PUT', body: body({ aiArt }) }),
 };
 
 export function errorMessage(error: unknown): string {

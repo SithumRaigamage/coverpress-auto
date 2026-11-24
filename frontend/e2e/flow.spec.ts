@@ -61,6 +61,21 @@ test('Run again adds a new version to the same card, and any version can be appr
   await expect(page.getByRole('region', { name: /^Approved/ }).getByRole('article', { name: /Neon Harbor/ })).toBeVisible();
 });
 
+test('AI art: edit the drafted prompt, generate, and the new image becomes the front', async ({ page }) => {
+  await page.goto('/games/103');
+  const prompt = page.getByRole('textbox', { name: 'Prompt' });
+  await expect(prompt).toHaveValue(/Glass Orchard/);
+  await prompt.fill('A glass greenhouse in an orchard at golden hour, soft light, painterly.');
+  await page.getByRole('combobox', { name: 'Images per press' }).selectOption('1');
+  await page.getByRole('button', { name: 'Generate art' }).click();
+
+  const grid = page.getByRole('list', { name: 'Art candidates' });
+  const front = grid.getByRole('button', { pressed: true });
+  await expect(front).toHaveAccessibleName(/Use AI AI generated, \d+ by \d+, fit \d+, as front art/);
+  await expect(page.getByRole('radio', { name: /^AI/ })).toContainText('1');
+  await expect(page.getByText(/Front art · AI · 1512 × 1748/)).toBeVisible();
+});
+
 test('the art picker auto-selects the best fit and a click swaps the front', async ({ page }) => {
   await page.goto('/games/101');
   const grid = page.getByRole('list', { name: 'Art candidates' });
