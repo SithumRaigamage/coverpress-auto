@@ -1,12 +1,15 @@
 /** Settings — keys and models live in .env (read-only here; the browser never sees a key).
  *  The one writable setting is the pipeline's optional AI-art step. */
+import { useState } from 'react';
 import { Link } from 'react-router';
+import { Trash2 } from 'lucide-react';
 import { errorMessage } from '../../api/client';
-import { useSetPipeline } from '../../api/mutations';
+import { useDeleteEverything, useSetPipeline } from '../../api/mutations';
 import { useLlmSettings, useSettings } from '../../api/queries';
 import { useToast } from '../../components/Toast';
 import { cn } from '../../lib/cn';
-import { Card, ErrorPanel, Meter, PageHeader, Pill, Skeleton } from '../../components/ui';
+import { Button, Card, ErrorPanel, Meter, PageHeader, Pill, Skeleton } from '../../components/ui';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { compact } from '../../lib/status';
 
 export function Settings() {
@@ -154,6 +157,49 @@ export function Settings() {
           <Link to="/legal" className="text-accent underline underline-offset-2">Acceptable use</Link>
         </p>
       </Card>
+
+      <DangerZone />
     </div>
+  );
+}
+
+/** Settings → Danger zone: delete every shelf, cover, version and run (and optionally all AI art). */
+function DangerZone() {
+  const wipe = useDeleteEverything();
+  const toast = useToast();
+  const [aiArt, setAiArt] = useState(false);
+  return (
+    <Card className="border-danger/40 p-5">
+      <h2 className="mb-1 text-[15px] font-semibold text-danger">Danger zone</h2>
+      <p className="text-sm text-muted">
+        Start over: every shelf, cover, version, approval and run is deleted, with their files. Settings, the RAWG cache and the usage
+        meters stay.
+      </p>
+      <div className="mt-4">
+        <ConfirmDialog
+          title="Delete everything?"
+          description="Every shelf, cover, version and run goes, with their files. This can’t be undone. Back up the data folder first if you might want it back."
+          confirmLabel="Delete everything"
+          requireText="DELETE"
+          onConfirm={() =>
+            wipe.mutate(aiArt, {
+              onSuccess: (r) =>
+                toast(`Deleted ${r.shelves} shelf${r.shelves === 1 ? '' : 'ves'} and ${r.covers} cover${r.covers === 1 ? '' : 's'}${r.aiArt ? ', and all AI art' : ''}.`, 'success'),
+              onError: (e) => toast(errorMessage(e), 'error'),
+            })
+          }
+          trigger={
+            <Button variant="danger" disabled={wipe.isPending} icon={<Trash2 size={16} aria-hidden />}>
+              Delete all covers, shelves and runs
+            </Button>
+          }
+        >
+          <label className="flex min-h-11 items-center gap-3 text-sm">
+            <input type="checkbox" checked={aiArt} onChange={(e) => setAiArt(e.target.checked)} className="size-5 accent-[var(--cp-danger)]" />
+            Also delete every AI-generated image
+          </label>
+        </ConfirmDialog>
+      </div>
+    </Card>
   );
 }

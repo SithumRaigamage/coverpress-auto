@@ -122,4 +122,23 @@ describe('ReviewBoard', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Approve Iron Tide version 1' }));
     await waitFor(() => expect(bodies).toContainEqual({ decision: 'approved', renderId: 'r1' }));
   });
+  it('deletes a cover only after the confirmation', async () => {
+    setup();
+    const card = await within(column('Needs review')).findByRole('article', { name: /Iron Tide/ });
+    fireEvent.click(within(card).getByRole('button', { name: 'Delete Iron Tide' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Iron Tide?' });
+    expect(calls.some((c) => c.startsWith('DELETE'))).toBe(false);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete cover' }));
+    await waitFor(() => expect(calls).toContain('DELETE /api/covers/c1'));
+  });
+
+  it('deletes only the version on screen', async () => {
+    setup();
+    const card = await within(column('Needs review')).findByRole('article', { name: /Iron Tide/ });
+    fireEvent.click(within(card).getByRole('button', { name: 'Delete v2' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Iron Tide v2?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete v2' }));
+    await waitFor(() => expect(calls).toContain('DELETE /api/covers/c1/versions/r2'));
+    expect(calls).not.toContain('DELETE /api/covers/c1');
+  });
 });

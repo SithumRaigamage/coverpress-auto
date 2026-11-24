@@ -2,12 +2,13 @@
  *  Optimistic decisions; keyboard: J/K move, A approve the shown version, R run again. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { Printer, SlidersHorizontal } from 'lucide-react';
+import { Printer, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { errorMessage } from '../../api/client';
-import { useAdjust, useDecision, useReplay, useRetry, useUploadFront } from '../../api/mutations';
+import { useAdjust, useDecision, useDeleteCover, useDeleteCovers, useDeleteVersion, useReplay, useRetry, useUploadFront } from '../../api/mutations';
 import { useCovers, useProjects } from '../../api/queries';
 import type { Cover, CoverVersion, Overrides } from '../../api/types';
-import { Button, ButtonLink, CoverThumb, ErrorPanel, PageHeader, Select, Skeleton } from '../../components/ui';
+import { Button, ButtonLink, CoverThumb, ErrorPanel, IconButton, PageHeader, Select, Skeleton } from '../../components/ui';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
 import { cn } from '../../lib/cn';
 import { boardColumn, canRetry, isBusy, isPrintable, type BoardColumn } from '../../lib/status';
@@ -32,6 +33,9 @@ export function ReviewBoard() {
   const decision = useDecision();
   const retry = useRetry();
   const replay = useReplay();
+  const deleteCover = useDeleteCover();
+  const deleteCovers = useDeleteCovers();
+  const deleteVersion = useDeleteVersion();
   const toast = useToast();
   const [focusId, setFocusId] = useState<string | null>(params.get('cover'));
   // coverId → the version the reviewer is looking at (and would approve).
@@ -74,6 +78,50 @@ export function ReviewBoard() {
     [retry, replay, toast],
   );
 
+  const removeCover = useCallback(
+    (c: Cover) =>
+      deleteCover.mutate(c.id, {
+        onSuccess: () => toast(`${c.title} deleted, with every version.`, 'success'),
+        onError: (e) => toast(`Could not delete ${c.title}: ${errorMessage(e)}`, 'error'),
+      }),
+    [deleteCover, toast],
+  );
+  const removeVersion = useCallback(
+    (c: Cover, v: CoverVersion) =>
+      deleteVersion.mutate(
+        { coverId: c.id, renderId: v.id },
+        {
+          onSuccess: (r) => {
+            setShown((s) => {
+              const next = { ...s };
+              delete next[c.id];
+              return next;
+            });
+            toast(`${c.title} v${v.version} deleted.${r.approvalCleared ? ' It was the approved version, so the cover is back in review.' : ''}`, 'success');
+          },
+          onError: (e) => toast(`Could not delete v${v.version}: ${errorMessage(e)}`, 'error'),
+        },
+      ),
+    [deleteVersion, toast],
+  );
+  const clearColumn = useCallback(
+    (label: string, list: Cover[]) =>
+      deleteCovers.mutate(
+        list.map((c) => c.id),
+        {
+          onSuccess: (r) => {
+            const building = r.skipped.filter((x) => x.reason === 'building').length;
+            toast(
+              `${r.deleted.length} cover${r.deleted.length === 1 ? '' : 's'} deleted from ${label}.${building ? ` ${building} still building, so kept.` : ''}`,
+              building ? 'info' : 'success',
+            );
+          },
+          onError: (e) => toast(`Could not clear ${label}: ${errorMessage(e)}`, 'error'),
+        },
+      ),
+    [deleteCovers, toast],
+  );
+
   // Deep link (?cover=) focuses that card once the board has loaded.
   const deepLinked = useRef(false);
   useEffect(() => {
@@ -85,7 +133,7 @@ export function ReviewBoard() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || t.closest?.('[role="dialog"]')) return;
       const key = e.key.toLowerCase();
       if (!['a', 'r', 'j', 'k'].includes(key) || !ordered.length) return;
       const index = Math.max(0, ordered.findIndex((c) => c.id === focusId));
@@ -151,11 +199,31 @@ export function ReviewBoard() {
           <div className="grid min-w-[1180px] grid-cols-5 gap-3">
             {COLUMNS.map((col) => (
               <section key={col.key} aria-labelledby={`col-${col.key}`} className="flex min-h-[50vh] flex-col rounded-panel border border-line bg-surface/60">
-                <h2 id={`col-${col.key}`} className="flex items-center gap-2 border-b border-line px-3 py-2.5 text-[13px] font-semibold">
-                  <span aria-hidden className={cn('size-2 rounded-full', col.dot)} />
-                  {col.label}
-                  <span className="ml-auto font-mono text-[11px] font-normal text-faint">{covers.data ? byColumn[col.key].length : '–'}</span>
-                </h2>
+                <div className="flex min-h-12 items-center gap-1 border-b border-line py-0.5 pr-0.5 pl-3">
+                  <h2 id={`col-${col.key}`} className="flex flex-1 items-center gap-2 text-[13px] font-semibold">
+                    <span aria-hidden className={cn('size-2 rounded-full', col.dot)} />
+                    {col.label}
+                    <span className="ml-auto font-mono text-[11px] font-normal text-faint">{covers.data ? byColumn[col.key].length : '–'}</span>
+                  </h2>
+                  {covers.data && byColumn[col.key].length > 0 && (
+                    <ConfirmDialog
+                      title={`Delete all ${byColumn[col.key].length} in ${col.label}?`}
+                      description={
+                        <>
+                          Every cover in this column goes, with all its versions, art and runs. This can’t be undone.
+                          {col.key === 'building' || byColumn[col.key].some((c) => isBusy(c.status)) ? ' Covers that are building right now are kept.' : ''}
+                        </>
+                      }
+                      confirmLabel={`Delete ${byColumn[col.key].length}`}
+                      onConfirm={() => clearColumn(col.label, byColumn[col.key])}
+                      trigger={
+                        <IconButton label={`Delete every cover in ${col.label}`} className="size-11 hover:text-danger">
+                          <Trash2 size={15} aria-hidden />
+                        </IconButton>
+                      }
+                    />
+                  )}
+                </div>
                 <div className="flex flex-col gap-2 p-2">
                   {!covers.data ? (
                     <Skeleton className="h-28" />
@@ -176,6 +244,8 @@ export function ReviewBoard() {
                         }}
                         onApprove={() => approve(c)}
                         onRunAgain={() => runAgain(c)}
+                        onDelete={() => removeCover(c)}
+                        onDeleteVersion={(v) => removeVersion(c, v)}
                       />
                     ))
                   )}
@@ -203,6 +273,8 @@ function BoardCard({
   refCb,
   onApprove,
   onRunAgain,
+  onDelete,
+  onDeleteVersion,
 }: {
   cover: Cover;
   version: CoverVersion | undefined;
@@ -212,6 +284,8 @@ function BoardCard({
   refCb: (el: HTMLElement | null) => void;
   onApprove: () => void;
   onRunAgain: () => void;
+  onDelete: () => void;
+  onDeleteVersion: (v: CoverVersion) => void;
 }) {
   const column = boardColumn(cover.status);
   const versions = cover.versions || [];
@@ -255,6 +329,22 @@ function BoardCard({
             </p>
           )}
         </div>
+        <ConfirmDialog
+          title={`Delete ${cover.title}?`}
+          description={
+            <>
+              The cover goes with {versions.length > 1 ? `all ${versions.length} versions` : versions.length === 1 ? 'its one version' : 'everything it has'}, its art and its run history. This can’t be undone.
+              {isBusy(cover.status) ? ' If it is building right now, wait for the run to finish.' : ''}
+            </>
+          }
+          confirmLabel="Delete cover"
+          onConfirm={onDelete}
+          trigger={
+            <IconButton label={`Delete ${cover.title}`} className="-mt-1 -mr-1 shrink-0 hover:text-danger">
+              <Trash2 size={15} aria-hidden />
+            </IconButton>
+          }
+        />
       </div>
 
       {versions.length > 1 && (
@@ -280,6 +370,23 @@ function BoardCard({
             );
           })}
         </div>
+      )}
+      {versions.length > 1 && version && !isBusy(cover.status) && (
+        <ConfirmDialog
+          title={`Delete ${cover.title} v${version.version}?`}
+          description={
+            isApprovedVersion
+              ? 'This is the approved version. Deleting it sends the cover back to review, and nothing prints until you approve another version.'
+              : 'Only this version goes. The other versions stay.'
+          }
+          confirmLabel={`Delete v${version.version}`}
+          onConfirm={() => onDeleteVersion(version)}
+          trigger={
+            <Button size="sm" variant="ghost" className="justify-start hover:text-danger" icon={<Trash2 size={14} aria-hidden />}>
+              Delete v{version.version}
+            </Button>
+          }
+        />
       )}
 
       {issue && (column === 'review' || column === 'failed') && (

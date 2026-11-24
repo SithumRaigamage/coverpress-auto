@@ -1,13 +1,14 @@
 /** Screen 3 — Pipeline run. Seven steps, a live log and the real wrap once rendered. Polls every second while active. */
 import { useEffect, useRef } from 'react';
-import { Link, useParams } from 'react-router';
-import { Check, ChevronRight, RotateCcw, X } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router';
+import { Check, ChevronRight, RotateCcw, Trash2, X } from 'lucide-react';
 import { errorMessage } from '../../api/client';
-import { useReplay } from '../../api/mutations';
+import { useDeleteCover, useReplay } from '../../api/mutations';
 import { useCoverRun } from '../../api/queries';
 import type { CoverRun, LogLine, RunStep } from '../../api/types';
 import { Button, ButtonLink, Card, Chip, ErrorPanel, Pill, ProgressBar, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { cn } from '../../lib/cn';
 import { isBusy, runProgress, timeOfDay, type Tone } from '../../lib/status';
 
@@ -48,6 +49,8 @@ function badge(data: CoverRun): { tone: Tone; label: string } {
 function Run({ data }: { data: CoverRun }) {
   const { cover, run, render, qc } = data;
   const replay = useReplay();
+  const deleteCover = useDeleteCover();
+  const navigate = useNavigate();
   const toast = useToast();
   const b = badge(data);
   const steps: RunStep[] = run?.steps || data.steps.map((s) => ({ ...s, state: 'pending' as const, detail: '' }));
@@ -107,6 +110,25 @@ function Run({ data }: { data: CoverRun }) {
             >
               Replay run
             </Button>
+            <ConfirmDialog
+              title={`Delete ${cover.title}?`}
+              description="The cover goes with every version, its art and its run history. This can’t be undone."
+              confirmLabel="Delete cover"
+              onConfirm={() =>
+                deleteCover.mutate(cover.id, {
+                  onSuccess: () => {
+                    toast(`${cover.title} deleted.`, 'success');
+                    navigate('/runs', { replace: true });
+                  },
+                  onError: (e) => toast(errorMessage(e), 'error'),
+                })
+              }
+              trigger={
+                <Button variant="danger" disabled={run?.state === 'running' || deleteCover.isPending} icon={<Trash2 size={16} aria-hidden />} title={run?.state === 'running' ? 'Wait for the run to finish' : undefined}>
+                  Delete
+                </Button>
+              }
+            />
             <ButtonLink variant="primary" to={`/review?cover=${cover.id}`}>
               Go to review
             </ButtonLink>

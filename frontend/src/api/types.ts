@@ -430,3 +430,26 @@ export interface CoversResponse {
   covers: Cover[];
   pending: number;
 }
+
+/* ------------------------------------------------------------- deleting */
+
+export interface BulkDeleteResult {
+  deleted: string[];
+  /** 'building' = its run is in progress; 'not_found' = already gone. */
+  skipped: Array<{ id: string; reason: 'building' | 'not_found' }>;
+}
+
+export interface DeleteVersionResult {
+  deleted: string;
+  coverId: string;
+  status: CoverStatus;
+  /** True when the deleted version was the approved one. */
+  approvalCleared: boolean;
+  versions: number;
+}
+
+export interface DeleteEverythingResult {
+  shelves: number;
+  covers: number;
+  aiArt: boolean;
+}

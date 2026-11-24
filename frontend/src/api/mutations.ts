@@ -155,3 +155,119 @@ export function useSetPipeline() {
     onSuccess: () => void client.invalidateQueries({ queryKey: qk.settings }),
   });
 }
+
+/* ------------------------------------------------------------- deleting */
+
+/** Drop covers from every cached cover list at once; returns a rollback. */
+function removeCovers(client: QueryClient, ids: string[]) {
+  const gone = new Set(ids);
+  const snapshots = client.getQueriesData<CoversResponse>({ queryKey: qk.coversAll });
+  for (const [key, data] of snapshots) {
+    if (!data) continue;
+    client.setQueryData<CoversResponse>(key, { ...data, covers: data.covers.filter((c) => !gone.has(c.id)) });
+  }
+  return () => {
+    for (const [key, data] of snapshots) client.setQueryData(key, data);
+  };
+}
+
+/** Everything a delete can change, including print sheets and shelf mosaics. */
+function invalidateAfterDelete(client: QueryClient) {
+  invalidatePipeline(client);
+  void client.invalidateQueries({ queryKey: ['print'] });
+  void client.invalidateQueries({ queryKey: ['project'] });
+  void client.invalidateQueries({ queryKey: ['run'] });
+  void client.invalidateQueries({ queryKey: ['cover'] });
+}
+
+/** One cover with every version. Optimistic: the card disappears at once. */
+export function useDeleteCover() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (coverId: string) => api.deleteCover(coverId),
+    onMutate: async (coverId) => {
+      await client.cancelQueries({ queryKey: qk.coversAll });
+      return { rollback: removeCovers(client, [coverId]) };
+    },
+    onError: (_e, _v, ctx) => ctx?.rollback(),
+    onSettled: () => invalidateAfterDelete(client),
+  });
+}
+
+/** "Clear" on a review column. Covers that are building come back as skipped. */
+export function useDeleteCovers() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) => api.deleteCovers(ids),
+    onMutate: async (ids) => {
+      await client.cancelQueries({ queryKey: qk.coversAll });
+      return { rollback: removeCovers(client, ids) };
+    },
+    onError: (_e, _v, ctx) => ctx?.rollback(),
+    onSettled: () => invalidateAfterDelete(client),
+  });
+}
+
+export function useDeleteVersion() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ coverId, renderId }: { coverId: string; renderId: string }) => api.deleteVersion(coverId, renderId),
+    onSettled: (_r, _e, { coverId }) => {
+      invalidatePipeline(client, coverId);
+      void client.invalidateQueries({ queryKey: ['print'] });
+    },
+  });
+}
+
+export function useDeleteRun() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => api.deleteRun(runId),
+    onSettled: (r) => invalidatePipeline(client, r?.coverId),
+  });
+}
+
+export function useClearRuns() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.clearRuns(),
+    onSettled: () => {
+      invalidatePipeline(client);
+      void client.invalidateQueries({ queryKey: ['run'] });
+    },
+  });
+}
+
+export function useDeleteProject() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) => api.deleteProject(projectId),
+    onSettled: () => invalidateAfterDelete(client),
+  });
+}
+
+/** AI drafts on the game screen: one image, or all of them. */
+export function useDeleteAiArt(rawgId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    /** Resolves to how many images went. */
+    mutationFn: async (target: { url: string } | 'all'): Promise<{ deleted: number }> => {
+      if (target === 'all') return api.clearAiArt(rawgId);
+      await api.deleteAiImage(target.url);
+      return { deleted: 1 };
+    },
+    onSettled: () => void client.invalidateQueries({ queryKey: qk.gameArt(rawgId) }),
+  });
+}
+
+/** Settings → Danger zone. Clears every cache that could still show deleted work. */
+export function useDeleteEverything() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (aiArt: boolean) => api.deleteEverything(aiArt),
+    onSettled: () => {
+      invalidateAfterDelete(client);
+      void client.invalidateQueries({ queryKey: ['game'] });
+    },
+  });
+}

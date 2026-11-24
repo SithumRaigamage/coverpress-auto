@@ -1,12 +1,13 @@
 /** Screen 2 — Game detail & art picker. Picks the best-fit art automatically; one click runs every step. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ChevronRight, Play, Plus, RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronRight, Play, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 import { errorMessage } from '../../api/client';
-import { useCreateGameCover, useDraftCopy, useGenerateArt } from '../../api/mutations';
+import { useCreateGameCover, useDeleteAiArt, useDraftCopy, useGenerateArt } from '../../api/mutations';
 import { useAiPrompt, useGame, useGameArt, useLlmSettings, useMe, useProjects } from '../../api/queries';
 import type { ArtItem, BackCopy, CoverStyle, GameArt, Platform } from '../../api/types';
-import { Button, Card, Chip, ErrorPanel, Pill, Segmented, Select, Skeleton } from '../../components/ui';
+import { Button, Card, Chip, ErrorPanel, IconButton, Pill, Segmented, Select, Skeleton } from '../../components/ui';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
 import { cn } from '../../lib/cn';
 import { fitTone, primaryPlatform, STATUS_META } from '../../lib/status';
@@ -61,7 +62,14 @@ function Detail({
   const [projectId, setProjectId] = useState('');
 
   // Auto-select the highest fit as Front until the user clicks a tile.
-  const frontId = pickedId ?? art?.best ?? null;
+  // A picked image that was deleted falls back to the automatic best pick.
+  const frontId = (pickedId && art?.items.some((i) => i.id === pickedId) ? pickedId : null) ?? art?.best ?? null;
+  const deleteAi = useDeleteAiArt(rawgId);
+  const removeAi = (item: ArtItem) =>
+    deleteAi.mutate(
+      { url: item.url },
+      { onSuccess: () => toast('AI image deleted.', 'success'), onError: (e) => toast(errorMessage(e), 'error') },
+    );
   const front = art?.items.find((i) => i.id === frontId) || null;
 
   // Draft copy with the language model once, if it is reachable and nothing is cached yet.
@@ -244,6 +252,24 @@ function Detail({
               <h2 id="art-heading" className="text-lg font-semibold">
                 Available art
               </h2>
+              {art && art.counts.ai > 0 && (
+                <ConfirmDialog
+                  title={`Delete all ${art.counts.ai} AI image${art.counts.ai === 1 ? '' : 's'} for ${data.game.name}?`}
+                  description="Every AI draft for this game goes. Your prompt stays, and covers already built keep their copy of the art."
+                  confirmLabel="Delete AI images"
+                  onConfirm={() =>
+                    deleteAi.mutate('all', {
+                      onSuccess: (r) => toast(`${r.deleted} AI image${r.deleted === 1 ? '' : 's'} deleted.`, 'success'),
+                      onError: (e) => toast(errorMessage(e), 'error'),
+                    })
+                  }
+                  trigger={
+                    <Button size="sm" variant="ghost" className="ml-auto hover:text-danger" icon={<Trash2 size={14} aria-hidden />}>
+                      Clear AI drafts
+                    </Button>
+                  }
+                />
+              )}
               {art && (
                 <Segmented
                   label="Art source"
@@ -276,7 +302,7 @@ function Detail({
             ) : visible.length === 0 ? (
               <p className="text-sm text-muted">No art from this source.</p>
             ) : (
-              <ArtGrid items={visible} frontId={frontId} onPick={setPickedId} />
+              <ArtGrid items={visible} frontId={frontId} onPick={setPickedId} onDeleteAi={removeAi} />
             )}
           </section>
         </div>
@@ -285,7 +311,17 @@ function Detail({
   );
 }
 
-function ArtGrid({ items, frontId, onPick }: { items: ArtItem[]; frontId: string | null; onPick: (id: string) => void }) {
+function ArtGrid({
+  items,
+  frontId,
+  onPick,
+  onDeleteAi,
+}: {
+  items: ArtItem[];
+  frontId: string | null;
+  onPick: (id: string) => void;
+  onDeleteAi: (item: ArtItem) => void;
+}) {
   // Masonry-ish: columns keep each tile at its true aspect ratio.
   return (
     <ul className="columns-2 gap-3 sm:columns-3 xl:columns-4" aria-label="Art candidates">
@@ -293,7 +329,7 @@ function ArtGrid({ items, frontId, onPick }: { items: ArtItem[]; frontId: string
         const isFront = item.id === frontId;
         const tone = fitTone(item.fit);
         return (
-          <li key={item.id} className="mb-3 break-inside-avoid">
+          <li key={item.id} className="relative mb-3 break-inside-avoid">
             <button
               type="button"
               onClick={() => onPick(item.id)}
@@ -329,6 +365,19 @@ function ArtGrid({ items, frontId, onPick }: { items: ArtItem[]; frontId: string
                 </Chip>
               </span>
             </button>
+            {item.source === 'AI' && (
+              <ConfirmDialog
+                title="Delete this AI image?"
+                description="Only this draft goes. Covers already built with it keep their own copy."
+                confirmLabel="Delete image"
+                onConfirm={() => onDeleteAi(item)}
+                trigger={
+                  <IconButton label={`Delete AI image ${item.width} by ${item.height}`} className="absolute top-1 right-1 bg-black/70 text-white hover:bg-danger hover:text-white">
+                    <Trash2 size={15} aria-hidden />
+                  </IconButton>
+                }
+              />
+            )}
           </li>
         );
       })}

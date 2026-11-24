@@ -5,6 +5,9 @@ import type {
   AiPrompt,
   ArtUploadResult,
   BackCopy,
+  BulkDeleteResult,
+  DeleteEverythingResult,
+  DeleteVersionResult,
   BatchResult,
   CoverDetail,
   CoverRun,
@@ -146,6 +149,26 @@ export const api = {
     }),
   deleteCover: (id: string) =>
     request<{ deleted: string; projectId: string }>(`/covers/${segment(id)}`, { method: 'DELETE' }),
+  /** Several covers at once (a review column). Covers that are building are skipped. */
+  deleteCovers: (ids: string[]) =>
+    request<BulkDeleteResult>('/covers/delete', { method: 'POST', body: body({ ids }) }),
+  /** One version. Never the last; the approved one sends the cover back to review. */
+  deleteVersion: (coverId: string, renderId: string) =>
+    request<DeleteVersionResult>(`/covers/${segment(coverId)}/versions/${segment(renderId)}`, { method: 'DELETE' }),
+  /** One run from the history; a queued run is cancelled. */
+  deleteRun: (id: string) =>
+    request<{ deleted: string; coverId: string; cancelled: boolean }>(`/runs/${segment(id)}`, { method: 'DELETE' }),
+  /** Finished runs (done and failed) only; active runs stay. */
+  clearRuns: () => request<{ deleted: number }>('/runs', { method: 'DELETE' }),
+  deleteProject: (id: string) =>
+    request<{ deleted: string; covers: number }>(`/projects/${segment(id)}`, { method: 'DELETE' }),
+  /** One AI draft, by its /api/generated URL. */
+  deleteAiImage: (url: string) => request<{ deleted: string }>(url.replace(/^\/api/, ''), { method: 'DELETE' }),
+  clearAiArt: (rawgId: number | string) =>
+    request<{ deleted: number }>(`/games/${segment(rawgId)}/ai-art`, { method: 'DELETE' }),
+  /** Settings → Danger zone. */
+  deleteEverything: (aiArt: boolean) =>
+    request<DeleteEverythingResult>('/reset', { method: 'POST', body: body({ confirm: 'DELETE', aiArt }) }),
   /** Hidden override only (review board). The main flow never uploads. */
   uploadArt: (id: string, slot: string, file: File) =>
     request<ArtUploadResult>(`/covers/${segment(id)}/art/${segment(slot)}`, {
