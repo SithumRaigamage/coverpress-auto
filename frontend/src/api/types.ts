@@ -32,6 +32,8 @@ export interface Account {
   id: string;
   email: string;
   local: boolean;
+  /** DEV_MODE=true: plan limits are bypassed (unlimited covers and shelves). */
+  devMode?: boolean;
   plan: Plan;
   usage: Usage;
 }

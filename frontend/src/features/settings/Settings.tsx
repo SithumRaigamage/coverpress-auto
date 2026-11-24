@@ -26,14 +26,33 @@ export function Settings() {
       />
 
       <Card className="p-5">
-        <h2 className="mb-3 text-[15px] font-semibold">Plan and usage</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-[15px] font-semibold">Plan and usage</h2>
+          {account.devMode && (
+            <Pill tone="accent" dot>
+              Developer mode · no cover or shelf limits
+            </Pill>
+          )}
+        </div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Meter label={`Covers this month · ${account.plan.label}`} value={account.usage.used} max={account.usage.limit} display={`${account.usage.used} / ${account.usage.limit}`} />
+          {!account.devMode && (
+            <Meter label={`Covers this month · ${account.plan.label}`} value={account.usage.used} max={account.usage.limit} display={`${account.usage.used} / ${account.usage.limit}`} />
+          )}
           {account.usage.rawg && (
             <Meter label="RAWG requests this month" value={account.usage.rawg.used} max={account.usage.rawg.limit} display={`${compact(account.usage.rawg.used)} / ${compact(account.usage.rawg.limit)}`} />
           )}
         </div>
-        <p className="mt-3 text-xs text-faint">A cover is counted once, when it is created. Re-running and re-rendering are free. Change the plan with <code className="font-mono">npm run plan</code>.</p>
+        <p className="mt-3 text-xs text-faint">
+          {account.devMode ? (
+            <>
+              <code className="font-mono">DEV_MODE=true</code> skips every plan check. RAWG’s 20,000 requests a month is an external limit and still applies.
+            </>
+          ) : (
+            <>
+              A cover is counted once, when it is created. Re-running and re-rendering are free. Change the plan with <code className="font-mono">npm run plan</code>.
+            </>
+          )}
+        </p>
       </Card>
 
       <Card className="p-5">

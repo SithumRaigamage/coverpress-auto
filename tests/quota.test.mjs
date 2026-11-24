@@ -86,3 +86,24 @@ test("re-rendering an existing cover does not spend quota", async () => {
     assert.equal((await get(server.url, "/api/me")).status, 200);
   });
 });
+
+test("DEV_MODE=true bypasses every plan limit but still counts RAWG", async () => {
+  process.env.DEV_MODE = "true";
+  try {
+    await withServer(async (server) => {
+      for (let i = 0; i < PLANS.free.projects + 2; i++) await createProject(server.url, `Dev shelf ${i}`);
+      const projectId = await createProject(server.url, "Dev big shelf");
+      const titles = Array.from({ length: PLANS.free.coversPerMonth + 5 }, (_, i) => `Dev game ${i}`).join("\n");
+      const body = await (await importTitles(server.url, projectId, titles)).json();
+      assert.equal(body.created.length, PLANS.free.coversPerMonth + 5);
+      assert.equal(body.skipped, 0);
+
+      const me = (await getJson(server.url, "/api/me")).body.account;
+      assert.equal(me.devMode, true);
+      assert.equal(me.plan.name, "free", "the plan is kept, only bypassed");
+      assert.equal(me.usage.rawg.limit, 20000);
+    });
+  } finally {
+    delete process.env.DEV_MODE;
+  }
+});

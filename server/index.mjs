@@ -166,6 +166,8 @@ export function createApp(options = {}) {
     id: account().id,
     email: account().email,
     local: true,
+    // Plan limits are bypassed; the UI hides the cover meter and plan label.
+    devMode: auth.devMode(),
     plan: planInfo(),
     usage: usage(),
   });
@@ -291,7 +293,7 @@ export function createApp(options = {}) {
   async function createProject(req, res) {
     const body = await readJson(req);
     const plan = auth.planOf(account());
-    if (auth.projectCount(db, account().id) >= plan.projects) {
+    if (!auth.devMode() && auth.projectCount(db, account().id) >= plan.projects) {
       throw new HttpError(402, `The ${plan.label} plan includes ${plan.projects} projects.`);
     }
     const name = String(body.name || "").trim();
@@ -331,7 +333,7 @@ export function createApp(options = {}) {
       .filter((l) => l && !l.startsWith("#"));
 
     const plan = auth.planOf(account());
-    const room = Math.max(0, plan.coversPerMonth - auth.usageThisMonth(db, account().id));
+    const room = auth.devMode() ? Infinity : Math.max(0, plan.coversPerMonth - auth.usageThisMonth(db, account().id));
 
     const created = [];
     let skipped = 0;
@@ -724,7 +726,8 @@ export function createApp(options = {}) {
     return repo.createProject(db, account().id, { name: "My library", platform: "PS5" });
   }
 
-  const coverRoom = () => Math.max(0, auth.planOf(account()).coversPerMonth - auth.usageThisMonth(db, account().id));
+  const coverRoom = () =>
+    auth.devMode() ? Infinity : Math.max(0, auth.planOf(account()).coversPerMonth - auth.usageThisMonth(db, account().id));
 
   /** Create (or re-run) a cover from a RAWG game with the art, layout and copy picked on the game screen. */
   async function createGameCover(req, res, ctx) {

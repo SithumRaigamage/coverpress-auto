@@ -11,6 +11,9 @@ import { createApp } from "../server/index.mjs";
 // and copy nondeterministic. Port 9 refuses connections immediately.
 process.env.OLLAMA_HOST = process.env.COVERPRESS_TEST_OLLAMA || "http://127.0.0.1:9";
 
+// Plan limits are under test; developer mode must be switched on explicitly.
+delete process.env.DEV_MODE;
+
 export async function boot(options = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "coverpress-test-"));
   const app = createApp({

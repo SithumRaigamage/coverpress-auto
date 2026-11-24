@@ -221,7 +221,9 @@ function Detail({
           <p className="-mt-2 text-xs text-faint">
             {existing
               ? 'Already on this shelf — re-running uses no quota.'
-              : left !== null
+              : me.data?.account.devMode
+                ? 'Developer mode: no cover limit.'
+                : left !== null
                 ? `Uses 1 of your ${left} remaining covers this month. Re-runs are free.`
                 : 'Uses 1 cover from your monthly quota. Re-runs are free.'}{' '}
             Fetch, render and checks run automatically; most covers finish in under a minute.

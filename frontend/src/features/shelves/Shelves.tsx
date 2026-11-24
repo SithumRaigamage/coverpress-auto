@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { Plus } from 'lucide-react';
 import { ApiError, errorMessage } from '../../api/client';
 import { useCreateProject } from '../../api/mutations';
-import { useProjects } from '../../api/queries';
+import { useMe, useProjects } from '../../api/queries';
 import type { Platform } from '../../api/types';
 import { Button, ButtonLink, Card, EmptyState, ErrorPanel, PageHeader, Segmented, Skeleton } from '../../components/ui';
 import { useToast } from '../../components/Toast';
@@ -17,6 +17,8 @@ export function Shelves() {
   const [platform, setPlatform] = useState<Platform>('PS5');
   const list = projects.data?.projects || [];
   const plan = projects.data?.plan;
+  const me = useMe();
+  const dev = me.data?.account.devMode;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,7 +39,7 @@ export function Shelves() {
     <div className="mx-auto flex max-w-[1200px] flex-col gap-6">
       <PageHeader
         title="My shelves"
-        subtitle={plan ? `Shelves group covers for review and printing. ${list.length} of ${plan.projects} on the ${plan.label} plan.` : 'Shelves group covers for review and printing.'}
+        subtitle={plan && !dev ? `Shelves group covers for review and printing. ${list.length} of ${plan.projects} on the ${plan.label} plan.` : 'Shelves group covers for review and printing.'}
       />
 
       <form onSubmit={submit} className="flex flex-wrap items-end gap-2" aria-label="New shelf">

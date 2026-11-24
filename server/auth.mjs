@@ -22,6 +22,14 @@ export const PLANS = {
 
 export const planOf = (account) => PLANS[account?.plan] || PLANS.free;
 
+/**
+ * DEV_MODE=true bypasses every plan limit: unlimited covers and projects. The
+ * plan and usage code stays in place for a future hosted SaaS — it is only
+ * skipped. Read on each call so tests (and the operator) can flip it live.
+ * RAWG's 20k/month is an external limit and is never bypassed.
+ */
+export const devMode = () => String(process.env.DEV_MODE || "").trim().toLowerCase() === "true";
+
 /* ---------------------------------------------------------------- quota */
 
 export function usageThisMonth(db, accountId) {

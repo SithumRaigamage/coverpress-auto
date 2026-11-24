@@ -117,7 +117,7 @@ function SidebarFooter() {
   return (
     <div className="hidden flex-col gap-4 border-t border-line px-5 py-4 md:flex">
       {rawg && <Meter label="RAWG requests" value={rawg.used} max={rawg.limit} display={`${compact(rawg.used)} / ${compact(rawg.limit)}`} />}
-      {usage && <Meter label="Covers this month" value={usage.used} max={usage.limit} display={`${usage.used} / ${usage.limit}`} />}
+      {usage && !me.data?.account.devMode && <Meter label="Covers this month" value={usage.used} max={usage.limit} display={`${usage.used} / ${usage.limit}`} />}
       <p className="flex items-center gap-2 text-xs text-muted" title={llm.data?.status?.detail}>
         <span
           aria-hidden
